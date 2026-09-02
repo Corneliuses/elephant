@@ -645,13 +645,23 @@ describe('disconnect / reconnect', () => {
   })
 
   it('grace carries into judging and skips there too', () => {
-    const s0 = run(drawing(), guess('b', 'cat'), { type: 'disconnect', now: T0 + 100, playerId: 'a' })
-    // Drawing deadline fires first (grace is later than drawing end only if disconnect was late; force it).
+    // Disconnect late enough that the drawing deadline falls before grace expires.
+    const d = drawing()
+    const s0 = run(d, guess('b', 'cat'), { type: 'disconnect', now: d.timerEndsAt! - 5000, playerId: 'a' })
+    expect(s0.graceEndsAt).toBeGreaterThan(s0.timerEndsAt!)
     const s1 = run(s0, { type: 'timeout', now: s0.timerEndsAt! })
     expect(s1.phase).toBe('judging')
     expect(s1.graceEndsAt).toBe(s0.graceEndsAt)
-    // Grace already expired by now, so the very next timeout skips.
-    const s = run(s1, { type: 'timeout', now: s1.timerEndsAt! - 1 })
+    const s = run(s1, { type: 'timeout', now: s1.graceEndsAt! })
+    expect(s.turns[0]).toMatchObject({ drawerId: 'a', skipped: true })
+    expect(s.players['b']!.score).toBe(0)
+    expect(drawerOf(s)).toBe('b')
+  })
+
+  it('when both deadlines have passed, the earlier one is honoured first', () => {
+    // Grace (T0+100+15s) expires long before the drawing deadline (T0+10+90s).
+    const s0 = run(drawing(), guess('b', 'cat'), { type: 'disconnect', now: T0 + 100, playerId: 'a' })
+    const s = run(s0, { type: 'timeout', now: s0.timerEndsAt! + 1 })
     expect(s.turns[0]).toMatchObject({ drawerId: 'a', skipped: true })
     expect(drawerOf(s)).toBe('b')
   })

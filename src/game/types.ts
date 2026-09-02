@@ -123,7 +123,8 @@ export interface ProjectedTurn extends Omit<Turn, 'guesses' | 'intent'> {
   guesses: ProjectedGuess[]
 }
 
-export interface ProjectedState extends Omit<GameState, 'turn' | 'nextGuessSeq'> {
+export interface ProjectedState extends Omit<GameState, 'turn' | 'turns' | 'nextGuessSeq'> {
+  turns: ProjectedTurn[]
   turn: ProjectedTurn | null
   /** The viewer's own id, echoed so the client doesn't have to track it. */
   you: PlayerId | null
