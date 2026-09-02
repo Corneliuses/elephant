@@ -49,8 +49,8 @@ Everything the DO does is thin glue. The rules live in `src/game/`.
 
 ```
 src/game/         pure state machine — zero I/O, zero Cloudflare imports
-src/room/         Durable Object: sockets, storage, alarm, stroke relay   (milestone 2)
-src/worker.ts     router + static assets                                  (milestone 2)
+src/room/         RoomDO (sockets, storage, alarm, stroke relay) + wire protocol
+src/worker.ts     router; will also serve static assets                   (milestone 3)
 web/              PWA client: Svelte + Vite                                 (milestone 3)
 ```
 
@@ -210,15 +210,50 @@ type Stroke =
 Coordinates are normalised to `[0, 1]` so every phone renders the same
 picture regardless of screen size.
 
-## Wire protocol (milestone 2)
+## HTTP API (worker)
 
-Client → server messages are the game events above minus `now` and
-`playerId` (the DO stamps both), plus `stroke`. Server → client:
+| Route | Purpose |
+|---|---|
+| `POST /api/rooms` | Create a room. Body `{config?, room?}` (see `CreateRoomRequest`). Returns `201 {code}`. |
+| `GET /api/rooms/:code` | `RoomInfo` `{code, phase, playerCount}` or 404. |
+| `GET /api/rooms/:code/ws` | WebSocket upgrade (426 without `Upgrade`, 404 for unknown rooms). Optional `?playerId=&secret=` to reconnect. |
+| `GET /api/rooms/:code/turns/:i/strokes` | Stroke log of turn `i` for the gallery. |
 
+Config overrides at creation are clamped to sane ranges (each timer 1 ms
+to 1 h, etc.); the same fields the game uses. `room.idleTtlMs` and
+`room.endedTtlMs` control garbage collection.
+
+The worker forwards to the DO with the room code baked into the DO name
+(`idFromName(code)`); the DO learns its code from the `/create` body.
+Creation retries with a fresh code if the DO already holds a live game.
+
+## Wire protocol
+
+Types live in `src/room/protocol.ts` and are shared with the client.
+
+**Client → server.** The game events minus `now` and `playerId` (the DO
+stamps both; anything the client sends for those is ignored), plus:
+
+- `join {name, avatar}` — first message on a fresh socket.
+- `stroke {strokes: Stroke[]}` — batched; accepted only from the current
+  drawer during `drawing`, silently dropped otherwise, `error` if malformed.
+- `leave` — remove the player; the server closes the socket with 4000.
+
+**Server → client.**
+
+- `welcome {playerId, secret}` — once, after a successful `join`.
 - `state {state: ProjectedState}` — full projected state on connect and
   after every change. Small enough (<10 KB) that diffs aren't worth it.
-- `strokes {strokes: Stroke[]}` — batched relay.
-- `error {message}` — from a rejected event.
+- `strokes {strokes, reset?}` — relay batch, or with `reset: true` the
+  full buffer to replace whatever the client has. A reset is sent on
+  join/reconnect and (empty) when a new turn starts, **before** the
+  `state` that announces the turn, so the canvas clears first.
+- `error {message}` — from a rejected event or malformed message. The
+  socket stays open.
+
+Messages over 64 KB or that are not a JSON object with a string `type`
+are rejected. Close codes: 4000 left, 4001 unauthorized, 4002 replaced
+by a newer socket for the same player, 4004 room gone.
 
 `project(state, viewerId)` strips: other players' guess authorship during
 `drawing`/`judging`; `intent` unless viewer is the drawer or phase is
@@ -229,16 +264,27 @@ Client → server messages are the game events above minus `now` and
 On first join the client stores `{code, playerId, secret}` in
 `localStorage`. The WebSocket URL carries `playerId` + `secret`; the DO
 checks it against storage and, if valid, applies `reconnect` instead of
-`join`. Socket close applies `disconnect`. The DO never removes a player
-on disconnect — only an explicit `leave` or the room being garbage
-collected does.
+`join` (no `welcome` is sent). A bad or unknown credential gets an
+`error` then close 4001. One socket per player: a new one closes the old
+with 4002 without marking the player disconnected. Socket close applies
+`disconnect` only when the player has no other open socket. The DO never
+removes a player on disconnect — only an explicit `leave` or the room
+being garbage collected does.
+
+The DO uses the Hibernatable WebSocket API; the player id is kept in the
+socket attachment so it survives hibernation.
 
 ## Room lifecycle
 
-- Room codes: 4 uppercase letters, excluding ambiguous glyphs (I, O).
-- The Worker creates a room by picking a code and forwarding to the DO.
+- Room codes: 4 uppercase letters from an alphabet without look-alikes
+  (no I or O).
+- The Worker creates a room by picking a code and asking the DO to
+  `/create`; a 409 (live game already there) means pick another.
 - A room with no connected players for 30 minutes deletes its storage
-  (via alarm). A room in `ended` for 24 hours does the same.
+  (via alarm). A room in `ended` for 24 hours does the same, closing any
+  remaining sockets with 4004. The DO alarm is the single timer: it
+  serves game deadlines, the disconnect grace, and both TTLs, always
+  armed at the earliest of them.
 
 ## Timers
 
@@ -249,15 +295,21 @@ collected does.
 | Reveal | 8 s | entering `reveal` |
 | Drawer-disconnect grace | 15 s | drawer `disconnect` during `drawing`/`judging` |
 
-All durations are constants in `src/game/config.ts` and can be overridden
-by passing a `config` to the reducer (tests use short values).
+All durations are constants in `src/game/config.ts`. They can be
+overridden per room at creation (`POST /api/rooms` body); the room tests
+use millisecond values to exercise the alarm path.
 
 ## Testing strategy
 
 `src/game/` is tested with vitest, no mocks: build a state, apply events,
 assert on the result. Coverage targets every row of the events table and
-every edge case in the proposal. The DO layer (milestone 2) is tested with
-`@cloudflare/vitest-pool-workers` against a real Miniflare DO.
+every edge case in the proposal.
+
+`src/room/` is tested with `@cloudflare/vitest-pool-workers`: the suite
+drives the real worker through `SELF` over HTTP and WebSockets and fires
+DO alarms with `runDurableObjectAlarm`. Miniflare also runs real alarms,
+so tests that set millisecond TTLs assert on the outcome rather than on
+whether the manual alarm call did the work.
 
 ## Client stack
 

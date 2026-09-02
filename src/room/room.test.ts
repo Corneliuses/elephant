@@ -5,6 +5,7 @@ import type { GameConfig, ProjectedState } from '../game/types'
 import {
   CLOSE_LEFT,
   CLOSE_REPLACED,
+  CLOSE_ROOM_GONE,
   CLOSE_UNAUTHORIZED,
   CODE_ALPHABET,
   CODE_LENGTH,
@@ -582,7 +583,8 @@ describe('garbage collection', () => {
     a.close()
     await a.closed
     await sleep(30)
-    expect(await runDurableObjectAlarm(stub(code))).toBe(true)
+    // The real alarm may already have fired; either way the room is gone.
+    await runDurableObjectAlarm(stub(code))
     expect((await roomInfo(code)).status).toBe(404)
     const ws = await SELF.fetch(`${BASE}/api/rooms/${code}/ws`, { headers: { Upgrade: 'websocket' } })
     expect(ws.status).toBe(404)
@@ -602,20 +604,24 @@ describe('garbage collection', () => {
   })
 
   it('deletes an ended room after endedTtlMs even with sockets open', async () => {
-    const { code, a, drawer, byId } = await startedRoom({ drawingMs: 5, revealMs: 5 }, { endedTtlMs: 20 })
-    // Burn through the round: three drawers, no guesses.
+    const { code, a, drawer, byId } = await startedRoom({}, { endedTtlMs: 20 })
+    // Burn through the round by hand: three drawers, no guesses, organizer advances.
+    let drawerId = drawer.playerId!
     for (let i = 0; i < 3; i++) {
-      const s = await a.stateWhere((st) => st.phase === 'drawing' && st.drawerIdx === i)
-      byId(s.turn!.drawerId).send({ type: 'end_drawing' })
+      byId(drawerId).send({ type: 'end_drawing' })
       await a.stateWhere((st) => st.phase === 'reveal')
       a.send({ type: 'advance' })
+      if (i < 2) {
+        const s = await a.stateWhere((st) => st.phase === 'drawing' && st.drawerIdx === i + 1)
+        drawerId = s.turn!.drawerId
+      }
     }
     await a.stateWhere((s) => s.phase === 'round_end')
     a.send({ type: 'end_game' })
     await a.stateWhere((s) => s.phase === 'ended')
     await sleep(30)
-    expect(await runDurableObjectAlarm(stub(code))).toBe(true)
+    await runDurableObjectAlarm(stub(code))
     expect((await roomInfo(code)).status).toBe(404)
-    void drawer
+    expect((await a.closed).code).toBe(CLOSE_ROOM_GONE)
   })
 })

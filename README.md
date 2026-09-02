@@ -13,11 +13,16 @@ drawer knows the whole elephant.
 
 ## Status
 
-Early. The pure game state machine lives in `src/game/` with tests. No
-transport or UI yet. Planned stack: Cloudflare Workers + Durable Objects
-for the room, Svelte 5 + Vite for the PWA client.
+Backend done, no UI yet.
+
+- `src/game/` — pure game state machine, tested.
+- `src/room/` — Cloudflare Durable Object per room: WebSockets, storage,
+  alarms, stroke relay, plus the wire protocol. Tested in workerd.
+- `src/worker.ts` — HTTP router (`/api/rooms`).
+- `web/` — Svelte 5 PWA client. Not started.
 
 ```sh
 npm install
-npm test
+npm test          # game core in node, room in workerd
+npm run dev       # wrangler dev
 ```
