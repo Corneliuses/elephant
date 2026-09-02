@@ -259,6 +259,85 @@ assert on the result. Coverage targets every row of the events table and
 every edge case in the proposal. The DO layer (milestone 2) is tested with
 `@cloudflare/vitest-pool-workers` against a real Miniflare DO.
 
+## Client: look and feel
+
+The proposal's brief: **bright, fun, engaging; reactive and crunchy; heavy
+use of animation.** This section turns that into rules the client is built
+against.
+
+### Visual language
+
+- **Colour.** A small, saturated palette on a light ground: one hot
+  primary, two or three loud accents, ink-black outlines. Each player's
+  avatar carries one accent so their name, guess bubble, and score share a
+  colour everywhere they appear. Dark mode is a *different bright*, not a
+  dimmed one.
+- **Type.** One chunky display face for headings, numbers and buttons; one
+  clean sans for body. Sizes err large: this is read at arm's length on a
+  phone in a noisy room.
+- **Shape.** Big radii, thick borders, hard drop shadows that shift on
+  press. Cards and buttons look like things you can pick up.
+- **The canvas** is the one calm surface: white, edge-to-edge, no chrome
+  over it. Everything loud lives around it.
+
+### Motion principles
+
+1. **Respond before the server does.** Every tap gets local feedback in
+   the same frame: press squash, colour flip, sound. The server's state
+   arrives ~50 ms later and the UI reconciles quietly. Never gate a button
+   animation on a round-trip.
+2. **Crunchy, not floaty.** Durations 120–300 ms for feedback, 300–600 ms
+   for transitions. Spring easings with visible overshoot for arrivals;
+   sharp ease-out for exits. Nothing linear, nothing slow.
+3. **Choreograph phase changes.** A phase change is a scene change:
+   outgoing elements leave, a beat, incoming elements stagger in. The order
+   tells the story (timer leaves → answers arrive → drawer's pick pops).
+4. **Idle is alive.** Waiting states have a low-amplitude loop: the timer
+   ring breathes, the ready badges bob, the "waiting for drawer" dots
+   march. Small, cheap, always there.
+5. **Weight.** Points have mass: they fly from the guess to the score,
+   the score bumps when they land, the leaderboard reorders with players
+   physically sliding past each other.
+6. **Sound and haptics are part of the feel** (short ticks, pops, a
+   whoosh on reveal, a single vibrate on award) but everything must read
+   without them: phones are muted in company.
+
+### Signature moments
+
+| Moment | What happens |
+|---|---|
+| Ready toggle | Button squashes, flips colour with a pop, avatar bounces in the roster. Organizer's roster ripples as each badge lands. |
+| Start game | Lobby cards scatter off-screen, the canvas slides up, the drawer's avatar stamps onto it, the 90-s ring snaps full and starts draining. |
+| Timer | Ring drains with a taut easing; last 10 s it pulses and the whole timer shakes harder each second. |
+| Guess submitted | Bubble thunks into the drawer's list with a squash; the guesser's own bubble sticks to their screen with a wiggle. Editing a guess slides it to the end. |
+| End of drawing | Canvas shrinks to a card, answers cascade in one by one (staggered, anonymous). Drawer taps to mark **Correct** (green stamp, screen flash) and **Funniest** (gold burst, confetti). |
+| Reveal | Each bubble flips to show its author's avatar. Points spawn as chips, fly to the leaderboard, land with a bump. The drawer's intent unfurls last: *"It was… a giraffe on a jet ski."* |
+| Leaderboard | Rows slide past each other on reorder; the leader's row gets a subtle shimmer; ties wobble. |
+| Round end / final | Winner's card grows and rocks; the gallery deals every drawing out like cards. |
+| Errors / rejections | Shake, not a modal. A red wiggle on the thing that was tapped. |
+
+### Implementation constraints
+
+- Animate only `transform` and `opacity`. No layout-triggering properties
+  in loops. Anything else must be a one-off transition.
+- The drawing canvas renders strokes directly (no per-stroke DOM); it is
+  never inside an animating ancestor during `drawing`.
+- One motion library for choreography and springs (e.g. Motion / Framer
+  Motion, or the Web Animations API with a small spring helper). Feedback
+  micro-interactions are plain CSS. Do not mix three systems.
+- Honour `prefers-reduced-motion`: cut loops, replace movement with fades,
+  keep the feedback (colour, sound) so the game still feels responsive.
+- Every animation is interruptible. A new state arriving mid-transition
+  retargets; it never queues.
+- Budget: 60 fps on a mid-range Android from three years ago. Test there,
+  not on the newest iPhone.
+
+### Accessibility
+
+Bright is not the same as legible. Text and outlines meet WCAG AA contrast
+against every accent. Colour never carries meaning alone (correct is a
+check *and* green; funniest is a star *and* gold). Touch targets ≥ 44 px.
+
 ## Open questions
 
 - Should a reconnecting organizer reclaim organizer status? (v1: no.)
@@ -266,3 +345,5 @@ every edge case in the proposal. The DO layer (milestone 2) is tested with
   at once? Client concern; the state machine is indifferent.
 - Do we want a "kick player" for the organizer? Cheap to add as a `leave`
   issued by the organizer.
+- Motion library: Motion (Framer) vs. Web Animations API + custom springs.
+  Decide when the client framework is chosen.
