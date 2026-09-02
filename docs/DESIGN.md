@@ -135,8 +135,8 @@ All events carry `now` (ms epoch) so the reducer never calls `Date.now()`.
 
 | Event | From | Allowed in | Effect |
 |---|---|---|---|
-| `join {playerId, name, avatar}` | client | any but `ended` | Add player. First player becomes organizer. During a round, appended to `drawOrder`. |
-| `set_ready {playerId, ready}` | client | `lobby` | Toggle ready. |
+| `join {playerId, name, avatar}` | client | any but `ended` | Add player (not ready). First player becomes organizer. |
+| `set_ready {playerId, ready}` | client | any but `ended` | Toggle in the lobby. Mid-game only `ready: true` is accepted, and during `drawing`/`judging`/`reveal` it appends the player to `drawOrder`. |
 | `start_game {playerId, seed}` | organizer | `lobby` | Requires ≥3 ready players. Shuffles ready players into `drawOrder` (seeded), starts round 1, turn 1. |
 | `set_intent {playerId, text}` | drawer | `drawing` | Private note of what's being drawn. |
 | `submit_guess {playerId, text}` | guesser | `drawing` | Upsert this player's guess. Editing moves it to the end of the order. |
@@ -148,7 +148,7 @@ All events carry `now` (ms epoch) so the reducer never calls `Date.now()`.
 | `disconnect {playerId}` | DO | any | Mark disconnected. Drawer in `drawing`/`judging` starts grace timer. Organizer disconnect promotes the longest-connected player. |
 | `reconnect {playerId}` | DO | any | Mark connected; clear grace if drawer. |
 | `leave {playerId}` | client/DO | any | Remove player. Current drawer leaving skips the turn. |
-| `timeout` | DO (alarm) | timed phases | Fires whichever deadline has passed: drawing → judging; judging → reveal with no awards; reveal → next turn; grace → skip turn. |
+| `timeout` | DO (alarm) | timed phases | Fires whichever deadline has passed (the earlier one first if both have): drawing → judging; judging → reveal with no awards; reveal → next turn; grace → skip turn. Before any deadline it is a no-op. |
 
 `nextAlarmAt(state)` returns the earliest pending deadline (or `null`) so
 the DO can call `storage.setAlarm()` after every change.
@@ -172,10 +172,12 @@ following one; if nobody in the remaining order is connected, → `round_end`.
 
 ### Late joiners
 
-A `join` during `drawing`/`judging`/`reveal` appends the player to
-`drawOrder` so they draw this round. They can `submit_guess` immediately.
-A `join` during `round_end` just adds them to `players`; they're included
-when the organizer starts the next round.
+A `join` mid-game adds the player but does nothing else: they are in the
+room but not in the game until they hit **Ready**. `set_ready` during
+`drawing`/`judging`/`reveal` appends them to `drawOrder` so they draw this
+round, and from then on they can `submit_guess`. `set_ready` during
+`round_end` just marks them; they're included when the organizer starts
+the next round. Only ready players may guess.
 
 ### Draw order
 
