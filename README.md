@@ -14,7 +14,8 @@ drawer knows the whole elephant.
 ## Status
 
 Early. The pure game state machine lives in `src/game/` with tests. No
-transport or UI yet.
+transport or UI yet. Planned stack: Cloudflare Workers + Durable Objects
+for the room, Svelte 5 + Vite for the PWA client.
 
 ```sh
 npm install

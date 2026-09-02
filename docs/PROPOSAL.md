@@ -84,6 +84,7 @@ Details and the motion vocabulary are in [DESIGN.md](DESIGN.md#client-look-and-f
 | Backend | **Cloudflare Workers + Durable Objects.** One DO per room. See [DESIGN.md](DESIGN.md). |
 | Persistence | Rooms live in DO storage for the life of the game; nothing long-term. |
 | Aesthetic | **Bright, fun, engaging.** Reactive and crunchy feel; heavy use of animation. Motion is a core client deliverable. |
+| Client framework | **Svelte 5 + Vite.** Native springs, transitions, and FLIP cover the animation brief without a motion library. |
 
 ## Out of scope for v1
 
@@ -98,7 +99,7 @@ Details and the motion vocabulary are in [DESIGN.md](DESIGN.md#client-look-and-f
 1. **Core** — pure game state machine with tests. *(this repo, now)*
 2. **Transport** — Durable Object wrapping the machine; WebSocket protocol;
    reconnection; alarms for timers.
-3. **Client** — PWA: lobby, canvas, guess input, judging, reveal,
+3. **Client** — Svelte PWA: lobby, canvas, guess input, judging, reveal,
    leaderboard. Mobile-first. Built animated from the start: the motion
    system, press feedback, and phase transitions ship with the first
    usable screen, not after.

@@ -51,7 +51,7 @@ Everything the DO does is thin glue. The rules live in `src/game/`.
 src/game/         pure state machine — zero I/O, zero Cloudflare imports
 src/room/         Durable Object: sockets, storage, alarm, stroke relay   (milestone 2)
 src/worker.ts     router + static assets                                  (milestone 2)
-web/              PWA client                                              (milestone 3)
+web/              PWA client: Svelte + Vite                                 (milestone 3)
 ```
 
 The boundary is `apply(state, event) → { state, error? }`. The DO never
@@ -259,6 +259,26 @@ assert on the result. Coverage targets every row of the events table and
 every edge case in the proposal. The DO layer (milestone 2) is tested with
 `@cloudflare/vitest-pool-workers` against a real Miniflare DO.
 
+## Client stack
+
+- **Svelte 5 + Vite**, TypeScript, served as static assets from the Worker.
+  Chosen over React + Motion because Svelte ships springs, enter/exit
+  transitions, and FLIP natively, so the animation-heavy brief is covered
+  without a 30 KB motion library, and because a smaller bundle matters on
+  a phone on bar Wi-Fi.
+- **State:** one `$state` store holding the latest `ProjectedState` from
+  the socket, plus a thin layer of local "optimistic" flags so taps answer
+  before the round-trip (a pressed Ready flips immediately and reconciles
+  when the server echoes).
+- **Drawing canvas:** a plain `<canvas>` component that consumes the
+  stroke feed directly. Not a Svelte-managed DOM tree: strokes never touch
+  the reactive graph.
+- **PWA:** `vite-plugin-pwa` for the manifest and a minimal service worker
+  (precache the shell, network-first for everything else). No offline
+  play; the point is the home-screen install and full-screen chrome.
+- **Shared types:** the client imports `GameEvent` / `ProjectedState`
+  from `src/game/` so the wire protocol has one definition.
+
 ## Client: look and feel
 
 The proposal's brief: **bright, fun, engaging; reactive and crunchy; heavy
@@ -322,13 +342,19 @@ against.
   in loops. Anything else must be a one-off transition.
 - The drawing canvas renders strokes directly (no per-stroke DOM); it is
   never inside an animating ancestor during `drawing`.
-- One motion library for choreography and springs (e.g. Motion / Framer
-  Motion, or the Web Animations API with a small spring helper). Feedback
-  micro-interactions are plain CSS. Do not mix three systems.
+- Motion comes from Svelte's built-ins, not a third-party library:
+  `svelte/motion` (`spring`, `tweened`) for values with physics,
+  `svelte/transition` (`in:`/`out:`, `fly`, `scale`, `crossfade`) for
+  enter/exit choreography, and `svelte/animate` (`flip`) for the
+  leaderboard reorder. The Web Animations API fills the gaps (long idle
+  loops, anything that must stay smooth while the canvas is busy).
+  Feedback micro-interactions are plain CSS. Do not add a motion library.
 - Honour `prefers-reduced-motion`: cut loops, replace movement with fades,
   keep the feedback (colour, sound) so the game still feels responsive.
 - Every animation is interruptible. A new state arriving mid-transition
-  retargets; it never queues.
+  retargets; it never queues. Svelte's `spring` store does this natively
+  (setting a new target keeps current velocity); transitions are keyed so
+  a replaced element runs its `out:` while the new one runs its `in:`.
 - Budget: 60 fps on a mid-range Android from three years ago. Test there,
   not on the newest iPhone.
 
@@ -345,5 +371,5 @@ check *and* green; funniest is a star *and* gold). Touch targets ≥ 44 px.
   at once? Client concern; the state machine is indifferent.
 - Do we want a "kick player" for the organizer? Cheap to add as a `leave`
   issued by the organizer.
-- Motion library: Motion (Framer) vs. Web Animations API + custom springs.
-  Decide when the client framework is chosen.
+- ~~Motion library: Motion (Framer) vs. Web Animations API + custom
+  springs.~~ Decided: Svelte built-ins plus WAAPI. See *Client stack*.
