@@ -1,0 +1,16 @@
+{
+  "name": "elephant",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "A phones-in-a-circle drawing game. Named for the blind men and the elephant.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
