@@ -206,10 +206,16 @@ reducer: `src/game/` stays pure and receives the answer as a `grade` event.
   envelopes are still accepted so a change of endpoint cannot silently
   stop grading.
 
-`GEMINI_API_KEY` is a Worker secret (`wrangler secret put`); without it
-the game runs with every turn ungraded. `GEMINI_MODEL` overrides the
-default model without a code change — worth reaching for, since the
-free tier's request quota is counted per model.
+`GEMINI_API_KEY` is a Worker secret (`wrangler secret put`, or the
+dashboard's Settings → Variables and Secrets with type "Secret");
+without it the game runs with every turn ungraded. Secrets survive a
+deploy, so setting it is a one-off.
+
+`GEMINI_MODEL` is a plain var in wrangler.jsonc rather than a dashboard
+variable: plaintext vars are deleted by the next `wrangler deploy`
+unless they are in the config, so setting it in the GUI would silently
+revert grading to `grader.ts`'s default. It is worth pinning, because
+the free tier's request quota is counted per model.
 
 Note that the room tests assert the no-key path, so a `.dev.vars`
 carrying `GEMINI_API_KEY` makes them call Gemini for real and fail.

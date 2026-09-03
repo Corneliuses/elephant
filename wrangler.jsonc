@@ -17,6 +17,12 @@
     "run_worker_first": ["/api/*"],
     "not_found_handling": "single-page-application"
   },
+  // Not a secret, so it lives in config rather than the dashboard: a
+  // plaintext var set in the GUI is deleted by the next `wrangler deploy`,
+  // which would silently drop grading back to the default model.
+  "vars": {
+    "GEMINI_MODEL": "gemini-3.5-flash"
+  },
   "durable_objects": {
     "bindings": [{ "name": "ROOM", "class_name": "RoomDO" }]
   },
