@@ -27,6 +27,7 @@ npx vitest run --project game             # src/game in node
 npx vitest run --project room             # src/room in workerd (Miniflare)
 npx vitest run src/game/machine.test.ts   # one file
 npx vitest run -t "grace carries"         # tests matching a name
+npm run coverage                          # v8 coverage, game project only (see note below)
 npm run typecheck                         # tsc --noEmit, strict + noUncheckedIndexedAccess + exactOptionalPropertyTypes
 npm run types                             # regenerate worker-configuration.d.ts after editing wrangler.jsonc
 npm run dev                               # wrangler dev (worker + DO + built assets, :8787)
@@ -158,6 +159,11 @@ fixtures `readyRoom()` / `startedRoom()`. Miniflare runs real DO alarms,
 so tests with millisecond timers assert outcomes, not whether
 `runDurableObjectAlarm` returned true. Fixtures call `clear()` on
 inboxes; remember the server sends the stroke reset before the state.
+
+`npm run coverage` deliberately covers **only** the game project. The v8
+provider cannot instrument code executing inside the workerd pool, so
+`src/room/` and `src/worker.ts` report 0% despite being well covered by
+`src/room/room.test.ts`. An aggregate number would be worse than none.
 
 `src/game/machine.test.ts` is organised by event, with helpers at the top
 (`lobby()`, `drawing()`, `judging()`, `reveal()`, `roundEnd()`) that build
