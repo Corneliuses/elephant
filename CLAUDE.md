@@ -23,20 +23,21 @@ Decided stack:
 
 ```sh
 npm install
-npm test                                  # both vitest projects
+npm test                                  # all four vitest projects
 npx vitest run --project game             # src/game in node
 npx vitest run --project room             # src/room in workerd (Miniflare)
+npx vitest run --project grader           # src/room/grader.test.ts in node
 npx vitest run --project web              # web/src in happy-dom
 npx vitest run src/game/machine.test.ts   # one file
 npx vitest run -t "grace carries"         # tests matching a name
-npm run coverage                          # v8 coverage, game project only (see note below)
+npm run coverage                          # v8 coverage: src/game + web/src/lib (see note below)
 npm run typecheck                         # tsc --noEmit, strict + noUncheckedIndexedAccess + exactOptionalPropertyTypes
 npm run types                             # regenerate worker-configuration.d.ts after editing wrangler.jsonc
 npm run dev                               # wrangler dev (worker + DO + built assets, :8787)
 npm run dev:web                           # vite, :5173, proxies /api to :8787
 npm run build                             # vite build -> web/dist (deploy needs this first)
 npm run check:web                         # svelte-check
-npm run e2e                               # full game in 3 browsers; needs `npm run dev` running
+npm run e2e                               # six scenarios in 3 browser contexts; needs `npm run dev`
 node scripts/icons.mjs                    # regenerate PWA icons after changing the mark
 ```
 
@@ -169,16 +170,18 @@ Rules that are easy to get wrong here:
 
 `web/src/**/*.test.ts` runs in happy-dom. `room.test.ts` drives the store
 through a `FakeWS` stand-in socket: reconnect backoff, the close-code
-branches (4001 forgets credentials, 4004 stops, 4000 is deliberate), and
-the `visibilitychange` wake-up. `paint.test.ts` covers the repaint
+branches (4001 forgets credentials, 4002 is a newer socket for the same
+player, 4004 stops, 4000 is deliberate), and the `visibilitychange`
+wake-up. `paint.test.ts` covers the repaint
 invariant with a recording fake 2D context — that logic lives in
 `lib/paint.ts` rather than `Canvas.svelte` precisely so it can be tested
 without a browser.
 
-`scripts/e2e.mjs` runs five scenarios in real browsers against
+`scripts/e2e.mjs` runs six scenarios in real browsers against
 `wrangler dev`: a full game to the gallery, the drawing timer expiring
 untouched, judging timing out with no awards, a drawer vanishing mid-turn,
-and a second round. Each scenario builds its own room, with short timers
+a second round, and the drawer being refused `end_drawing` until they say
+what they are drawing. Each scenario builds its own room, with short timers
 where it needs them. This has caught bugs that unit tests and typechecking
 did not; run it after changing anything in `web/` or the wire protocol.
 

@@ -107,15 +107,21 @@ Details and the motion vocabulary are in [DESIGN.md](DESIGN.md#client-look-and-f
 
 ## Milestones
 
-1. **Core** — pure game state machine with tests. *(this repo, now)*
+1. **Core** — pure game state machine with tests. *(done)*
 2. **Transport** — Durable Object wrapping the machine; WebSocket protocol;
-   reconnection; alarms for timers.
+   reconnection; alarms for timers. *(done)*
 3. **Client** — Svelte PWA: lobby, canvas, guess input, judging, reveal,
    leaderboard, gallery. Mobile-first. Built animated from the start: the
    motion system, press feedback, and phase transitions ship with the
    first usable screen, not after. *(done)*
-4. **Polish** — reactions during drawing, sound design, drawing undo,
-   export/share of the gallery.
+4. **Grading** — correctness decided by Gemini from the DO, concurrently
+   with the drawer's pick, degrading to "ungraded" on any failure.
+   *(done — see DESIGN.md "Grading")*
+5. **Polish** — reactions during drawing, sound design, drawing undo,
+   export/share of the gallery. *(next)*
+
+The game is playable end to end and deployed at
+[elephant.brcornelius.com](https://elephant.brcornelius.com).
 
 ## Risks
 
