@@ -532,6 +532,15 @@ describe('game flow', () => {
     expect(await r.json()).toEqual(batch)
     expect((await SELF.fetch(`${BASE}/api/rooms/${code}/turns/7/strokes`)).status).toBe(404)
   })
+
+  it('serves an empty array for a turn nobody drew on', async () => {
+    const { code, drawer, a } = await startedRoom()
+    drawer.send({ type: 'end_drawing' })
+    await a.stateWhere((s) => s.phase === 'reveal')
+    const r = await SELF.fetch(`${BASE}/api/rooms/${code}/turns/0/strokes`)
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual([])
+  })
 })
 
 // ---------------------------------------------------------------------------

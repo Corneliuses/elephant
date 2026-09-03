@@ -5,10 +5,20 @@
   import Join from './screens/Join.svelte'
   import Lobby from './screens/Lobby.svelte'
   import Drawing from './screens/Drawing.svelte'
+  import Judging from './screens/Judging.svelte'
+  import Reveal from './screens/Reveal.svelte'
+  import RoundEnd from './screens/RoundEnd.svelte'
+  import Ended from './screens/Ended.svelte'
   import Toast from './lib/Toast.svelte'
 
   // Runs whenever router.code changes — Svelte tracks the read, so there is
   // no dependency array to keep in sync.
+  // Mirrors the phase onto <body> so CSS and end-to-end tests can key off it
+  // without reaching into component internals.
+  $effect(() => {
+    document.body.dataset['phase'] = room.game?.phase ?? (router.code ? 'connecting' : 'home')
+  })
+
   $effect(() => {
     const code = router.code
     if (code) room.connect(code)
@@ -37,11 +47,14 @@
   <Lobby />
 {:else if room.game.phase === 'drawing'}
   <Drawing />
+{:else if room.game.phase === 'judging'}
+  <Judging />
+{:else if room.game.phase === 'reveal'}
+  <Reveal />
+{:else if room.game.phase === 'round_end'}
+  <RoundEnd />
 {:else}
-  <div class="screen center">
-    <h1>{room.game.phase}</h1>
-    <p>This screen is next.</p>
-  </div>
+  <Ended />
 {/if}
 
 <style>

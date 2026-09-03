@@ -87,11 +87,13 @@ export class RoomDO extends DurableObject<Env> {
     const m = /^\/turns\/(\d+)\/strokes$/.exec(path)
     if (request.method === 'GET' && m) {
       const idx = Number(m[1])
-      const strokes = idx === this.strokesTurn ? this.strokes : await this.ctx.storage.get<Stroke[]>(keyStrokes(idx))
-      if (!strokes || idx >= this.game.turns.length + (this.game.turn ? 1 : 0)) {
-        return json({ error: 'turn not found' }, 404)
-      }
-      return json(strokes)
+      // A turn that exists but was never drawn on has no stored strokes.
+      // That is an empty drawing, not a missing turn.
+      const known = idx >= 0 && (idx < this.game.turns.length || idx === this.strokesTurn)
+      if (!known) return json({ error: 'turn not found' }, 404)
+      const strokes =
+        idx === this.strokesTurn ? this.strokes : await this.ctx.storage.get<Stroke[]>(keyStrokes(idx))
+      return json(strokes ?? [])
     }
 
     return json({ error: 'not found' }, 404)

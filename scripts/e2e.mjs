@@ -46,8 +46,11 @@ await a.waitForFunction(() => document.body.textContent.includes('3 ready'), nul
 log('all ready')
 
 await a.getByRole('button', { name: 'Start game' }).click()
+const atPhase = (page, phase, timeout = 8000) =>
+  page.waitForFunction((p) => document.body.dataset.phase === p, phase, { timeout })
+
 for (const [n, p] of [['a', a], ['b', b], ['c', c]])
-  await p.locator('canvas').waitFor({ timeout: 5000 }).then(() => log(`  ${n}: drawing phase`))
+  await atPhase(p, 'drawing').then(() => log(`  ${n}: drawing phase`))
 
 // Who is drawing?
 const pages = { Ada: a, Bo: b, Cy: c }
@@ -94,6 +97,75 @@ await watcher.getByText('Your guess').waitFor({ timeout: 3000 }).then(() => log(
 
 await drawer.screenshot({ path: '/tmp/drawer.png' })
 await watcher.screenshot({ path: '/tmp/guesser.png' })
+
+// --- judging -------------------------------------------------------------
+const third = Object.entries(pages).find(([n]) => n !== drawerName && pages[n] !== watcher)[1]
+await third.getByLabel('Your guess').fill('the worm from Dune')
+await third.getByRole('button', { name: 'Guess' }).click()
+await drawer.waitForFunction(() => document.body.textContent.includes('2 guesses'), null, { timeout: 5000 })
+
+await drawer.getByRole('button', { name: 'Done drawing' }).click()
+await drawer.getByRole('heading', { name: 'Who got it right?' }).waitFor({ timeout: 5000 })
+log('judging: drawer prompted for the correct answer')
+await watcher.getByText('Sit tight…').waitFor({ timeout: 5000 })
+log('judging: guessers see the waiting state')
+
+await drawer.getByRole('button', { name: /snake having/ }).click()
+await drawer.getByRole('heading', { name: 'Which one is funniest?' }).waitFor({ timeout: 5000 })
+await drawer.screenshot({ path: '/tmp/judging.png' })
+await drawer.getByRole('button', { name: /worm from Dune/ }).click()
+log('judging: both awards made')
+
+// --- reveal --------------------------------------------------------------
+for (const p of Object.values(pages)) await atPhase(p, 'reveal')
+for (const p of Object.values(pages)) {
+  await p.getByText(/It was…|never said what it was|Nobody guessed/).waitFor({ timeout: 8000 })
+}
+log('reveal: intent shown to everyone')
+await watcher.waitForTimeout(1200)
+await watcher.screenshot({ path: '/tmp/reveal.png' })
+
+const scores = await a.evaluate(() =>
+  [...document.querySelectorAll('.board li')].map((li) => li.textContent.replace(/\s+/g, ' ').trim()),
+)
+log('leaderboard:', scores)
+if (!scores.some((s) => /\b2\b/.test(s))) throw new Error('expected someone to have scored 2')
+
+// --- play out the round --------------------------------------------------
+await a.getByRole('button', { name: 'Next' }).click()
+for (let i = 1; i < 3; i++) {
+  await atPhase(a, 'drawing')
+  const who = await a.evaluate(() => {
+    const t = document.querySelector('header strong')?.textContent ?? ''
+    return t.includes('You are') ? 'Ada' : t.replace(' is drawing', '')
+  })
+  await pages[who].getByRole('button', { name: 'Done drawing' }).click()
+  await atPhase(a, 'reveal')
+  await a.getByRole('button', { name: 'Next' }).click()
+}
+await a.getByRole('button', { name: 'Another round' }).waitFor({ timeout: 8000 })
+log('round_end reached')
+await a.screenshot({ path: '/tmp/roundend.png' })
+
+// --- end the game --------------------------------------------------------
+await a.getByRole('button', { name: 'End the game' }).click()
+await a.getByRole('heading', { name: /wins|Game over/ }).waitFor({ timeout: 8000 })
+await a.getByText('The gallery').waitFor({ timeout: 5000 })
+await a.waitForTimeout(900)
+const tiles = await a.locator('figure.turn').count()
+log('gallery tiles:', tiles)
+if (tiles !== 3) throw new Error(`expected 3 gallery tiles, got ${tiles}`)
+const galleryInk = await a.evaluate(() => {
+  const cv = document.querySelector('figure.turn canvas')
+  const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data
+  let n = 0
+  for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++
+  return n
+})
+log('ink in first gallery tile:', galleryInk)
+if (galleryInk === 0) throw new Error('gallery drawing did not load')
+await a.screenshot({ path: '/tmp/ended.png', fullPage: true })
+
 log('screenshots written')
 
 await browser.close()
