@@ -6,6 +6,13 @@
   // Cloudflare creates the DNS record and TLS certificate on deploy.
   // Do not pre-create an `elephant` record on the zone: deploy fails if one exists.
   "routes": [{ "pattern": "elephant.brcornelius.com", "custom_domain": true }],
+  "assets": {
+    // /api/* runs the Worker; everything else is served straight from the
+    // asset store. Unmatched paths fall back to index.html so /g/ABCD works.
+    "directory": "./web/dist",
+    "run_worker_first": ["/api/*"],
+    "not_found_handling": "single-page-application"
+  },
   "durable_objects": {
     "bindings": [{ "name": "ROOM", "class_name": "RoomDO" }]
   },

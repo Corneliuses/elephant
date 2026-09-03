@@ -1,0 +1,147 @@
+/*
+ * Design tokens. Bright, chunky, high-contrast — see docs/DESIGN.md
+ * "Client: look and feel". Everything loud lives around the canvas;
+ * the canvas itself stays calm.
+ */
+:root {
+  --paper: #fff8ed;
+  --card: #ffffff;
+  --ink: #1a1523;
+  --ink-soft: #6b6478;
+  --line: #1a1523;
+
+  --hot: #ff3d71;
+  --sun: #ffc93c;
+  --sky: #2bb3ff;
+  --leaf: #2bd97c;
+  --grape: #a855f7;
+  --tang: #ff8a3d;
+  --mint: #14e0c8;
+  --berry: #f0479b;
+
+  --r-sm: 10px;
+  --r: 16px;
+  --r-lg: 26px;
+  --r-pill: 999px;
+
+  /* Hard offset shadows: things look like objects you can press. */
+  --lift: 0 4px 0 var(--line);
+  --lift-lg: 0 6px 0 var(--line);
+  --lift-press: 0 1px 0 var(--line);
+  --border: 3px solid var(--line);
+
+  --fast: 110ms;
+  --base: 220ms;
+  --slow: 420ms;
+  --out: cubic-bezier(0.2, 0.9, 0.3, 1);
+  /* Overshoot. This is the "crunch". */
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --font: ui-rounded, "SF Pro Rounded", "Nunito", system-ui, -apple-system, sans-serif;
+}
+
+/* Dark mode is a different bright, not a dimmed one. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #17141f;
+    --card: #241f31;
+    --ink: #fff6e9;
+    --ink-soft: #a79db8;
+    --line: #0c0a12;
+  }
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 17px;
+  line-height: 1.35;
+  /* Phones only; stop iOS inflating text in landscape. */
+  -webkit-text-size-adjust: 100%;
+}
+
+#app { height: 100%; }
+
+h1, h2, h3 { margin: 0; font-weight: 900; letter-spacing: -0.02em; }
+h1 { font-size: 2rem; }
+h2 { font-size: 1.4rem; }
+
+button, input { font: inherit; color: inherit; }
+
+/* Chunky pressable. Squash happens instantly, before any network reply. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 56px;
+  padding: 0 1.4rem;
+  border: var(--border);
+  border-radius: var(--r-pill);
+  background: var(--sun);
+  color: var(--ink);
+  font-weight: 900;
+  font-size: 1.05rem;
+  box-shadow: var(--lift);
+  cursor: pointer;
+  transition:
+    transform var(--fast) var(--out),
+    box-shadow var(--fast) var(--out),
+    background var(--fast) var(--out);
+}
+.btn:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: var(--lift-press);
+}
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn.primary { background: var(--hot); color: #fff; }
+.btn.ghost { background: var(--card); box-shadow: var(--lift); }
+.btn.wide { width: 100%; }
+
+.field {
+  width: 100%;
+  min-height: 56px;
+  padding: 0 1.1rem;
+  border: var(--border);
+  border-radius: var(--r);
+  background: var(--card);
+  box-shadow: var(--lift);
+  outline: none;
+  font-weight: 700;
+}
+.field:focus { border-color: var(--hot); }
+
+.card {
+  border: var(--border);
+  border-radius: var(--r-lg);
+  background: var(--card);
+  box-shadow: var(--lift-lg);
+}
+
+.screen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: max(1rem, env(safe-area-inset-top)) 1rem max(1rem, env(safe-area-inset-bottom));
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+/* Honour the OS setting: keep colour feedback, drop the movement. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

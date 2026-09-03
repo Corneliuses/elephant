@@ -219,6 +219,14 @@ describe('rooms API', () => {
   it('404s unknown routes', async () => {
     expect((await SELF.fetch(`${BASE}/api/nope`)).status).toBe(404)
   })
+
+  it('still reaches the Worker for /api/* with static assets configured', async () => {
+    // `run_worker_first: ["/api/*"]` in wrangler.jsonc must keep the API
+    // ahead of the asset store; a regression here serves index.html instead.
+    const r = await SELF.fetch(`${BASE}/api/rooms`, { method: 'POST', body: '{}' })
+    expect(r.status).toBe(201)
+    expect(r.headers.get('content-type')).toContain('application/json')
+  })
 })
 
 // ---------------------------------------------------------------------------
