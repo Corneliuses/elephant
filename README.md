@@ -10,6 +10,8 @@ drawer knows the whole elephant.
 
 - [Proposal](docs/PROPOSAL.md) — what we're building and why
 - [Design](docs/DESIGN.md) — architecture, state machine, protocol, edge cases
+- [Client writeup](docs/svelte-writeup.md) — building the front end in
+  Svelte 5, with measured numbers against React
 
 ## Status
 
@@ -25,8 +27,9 @@ Playable end to end and deployed at
 
 ```sh
 npm install
-npm test          # game in node, room in workerd, client in happy-dom
+npm test          # four projects: game + grader in node, room in
+                  # workerd, client in happy-dom
 npm run build     # build the client into web/dist
 npm run dev       # wrangler dev: worker + DO + built assets, :8787
-npm run e2e       # five real-browser scenarios against `npm run dev`
+npm run e2e       # six real-browser scenarios against `npm run dev`
 ```

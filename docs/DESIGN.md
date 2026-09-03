@@ -19,17 +19,23 @@
 ```
 ┌──────────────┐   HTTPS (static)   ┌──────────────────────────┐
 │  PWA client  │◄──────────────────►│  Cloudflare Worker       │
-│  (phone)     │                    │  - serves static assets   │
-│              │   WebSocket        │  - routes /g/:code → DO   │
+│  (phone)     │                    │  - runs /api/* only      │
+│              │   WebSocket        │  - /api/rooms/:code → DO │
 │              │◄──────────────────►│                          │
 └──────────────┘                    │  ┌────────────────────┐  │
                                     │  │ RoomDO (per room)  │  │
                                     │  │  - holds sockets   │  │
-                                    │  │  - runs game.ts    │  │
+                                    │  │  - runs src/game/  │  │
                                     │  │  - storage + alarm │  │
                                     │  └────────────────────┘  │
                                     └──────────────────────────┘
 ```
+
+Static assets are served by the asset store, not by the Worker:
+`run_worker_first: ["/api/*"]` in `wrangler.jsonc` means only API paths
+reach Worker code, and `not_found_handling: "single-page-application"`
+falls unmatched paths back to `index.html` so a shared `/g/ABCD` link
+loads the client.
 
 **One Durable Object per room**, named by room code. The DO:
 
@@ -50,6 +56,7 @@ Everything the DO does is thin glue. The rules live in `src/game/`.
 ```
 src/game/         pure state machine — zero I/O, zero Cloudflare imports
 src/room/         RoomDO (sockets, storage, alarm, stroke relay) + wire protocol
+                  grader.ts — the Gemini call; pure fetch + parsing, no DO
 src/worker.ts     router + static assets
 web/              PWA client: Svelte 5 + Vite
 scripts/          e2e smoke test, PWA icon generation
@@ -363,6 +370,15 @@ use millisecond values to exercise the alarm path.
 
 ## Testing strategy
 
+Four vitest projects, each in the runtime that matches what it tests:
+
+| Project | Covers | Runtime |
+|---|---|---|
+| `game` | `src/game/**/*.test.ts` | node |
+| `room` | `src/room/**/*.test.ts` minus the grader | workerd (Miniflare) |
+| `grader` | `src/room/grader.test.ts` | node |
+| `web` | `web/src/**/*.test.ts` | happy-dom |
+
 `src/game/` is tested with vitest, no mocks: build a state, apply events,
 assert on the result. Coverage targets every row of the events table and
 every edge case in the proposal.
@@ -373,13 +389,41 @@ DO alarms with `runDurableObjectAlarm`. Miniflare also runs real alarms,
 so tests that set millisecond TTLs assert on the outcome rather than on
 whether the manual alarm call did the work.
 
+`grader.ts` is pure fetch plus parsing, so it runs in node rather than
+workerd — a separate project purely so it does not pay for a DO harness
+it never touches. Its tests assert the prompt's wording, the
+numbered-list contract, and that every failure mode resolves to
+`ok: false`.
+
+`web/` runs in happy-dom. The store is driven through a `FakeWS` stand-in
+socket (reconnect backoff, every close code, the `visibilitychange`
+wake-up); the repaint invariant is checked against a recording fake 2D
+context. That logic lives in `lib/paint.ts` rather than in
+`Canvas.svelte` precisely so it can be tested without a browser.
+
+`scripts/e2e.mjs` is the layer none of the above reaches: six scenarios in
+real browsers against `wrangler dev`, three browser contexts standing in
+for three phones. It has caught bugs that unit tests and typechecking did
+not — run it after changing anything in `web/` or the wire protocol.
+
+`npm run coverage` deliberately reports only `src/game/**` and
+`web/src/lib/**/*.ts`. The v8 provider cannot instrument code running
+inside the workerd pool, so `src/room/` would read 0% despite being well
+covered, and `.svelte` components are exercised by the e2e script, which
+coverage cannot see. Including either would show a gap where there is
+none.
+
 ## Client stack
 
 - **Svelte 5 + Vite**, TypeScript, served as static assets from the Worker.
   Chosen over React + Motion because Svelte ships springs, enter/exit
   transitions, and FLIP natively, so the animation-heavy brief is covered
   without a 30 KB motion library, and because a smaller bundle matters on
-  a phone on bar Wi-Fi.
+  a phone on bar Wi-Fi. Measured after the fact in
+  [the client writeup](svelte-writeup.md): the same screen built four ways
+  is 18.9 kB gzipped in Svelte against 62.6 kB in React, but **frame rate
+  is indistinguishable** at this app's size — the hot path is the canvas,
+  and the canvas is outside the reactive graph either way.
 - **State:** one `$state` store holding the latest `ProjectedState` from
   the socket, plus a thin layer of local "optimistic" flags so taps answer
   before the round-trip (a pressed Ready flips immediately and reconciles
@@ -480,7 +524,9 @@ check *and* green; the favourite is a star *and* gold). Touch targets ≥ 44 px.
 
 ## Open questions
 
-- Should a reconnecting organizer reclaim organizer status? (v1: no.)
+- ~~Should a reconnecting organizer reclaim organizer status?~~ No:
+  promotion picks the earliest-joined *connected* other player, and a
+  returning organizer stays demoted. Implemented and tested.
 - Should the reveal show guesses one at a time on the drawer's tap, or all
   at once? Client concern; the state machine is indifferent.
 - Do we want a "kick player" for the organizer? Cheap to add as a `leave`
