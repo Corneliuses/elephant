@@ -3,7 +3,7 @@
 *Notes from writing the client for [Elephant](https://elephant.brcornelius.com),
 a phones-in-a-circle party game: one person draws for 90 seconds, everyone else
 guesses on their own phone, and the drawer awards points for the right answer
-and, separately, for the funniest one.*
+and, separately, for the drawer's favourite one.*
 
 The backend was already done and boring in the good way — a pure reducer in
 `src/game/`, a Cloudflare Durable Object per room relaying WebSocket messages.

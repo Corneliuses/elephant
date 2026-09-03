@@ -170,6 +170,13 @@ async function startedRoom(config: Partial<GameConfig> = {}, room: Partial<RoomO
   return { ...r, drawer, guessers, byId }
 }
 
+/** Finishing needs an intent first, so tests almost always want both. */
+async function finish(drawer: Client, intent = 'a giraffe on a jet ski'): Promise<void> {
+  drawer.send({ type: 'set_intent', text: intent })
+  await drawer.stateWhere((s) => s.turn?.intent === intent)
+  drawer.send({ type: 'end_drawing' })
+}
+
 const stroke = (t: 'down' | 'move' | 'up', x = 0.5, y = 0.5): Stroke =>
   t === 'down' ? { t, x, y, color: '#000', width: 4 } : t === 'move' ? { t, x, y } : { t }
 
@@ -440,7 +447,7 @@ describe('game flow', () => {
     expect(g2.has('strokes')).toBe(false)
     expect(drawer.has('strokes')).toBe(false)
 
-    drawer.send({ type: 'end_drawing' })
+    await finish(drawer)
     await drawer.stateWhere((s) => s.phase !== 'drawing')
     drawer.send({ type: 'stroke', strokes: [stroke('down')] })
     await sleep(50)
@@ -497,16 +504,21 @@ describe('game flow', () => {
     const sg = await g1.latestState()
     expect(sg.turn!.intent).toBeNull()
 
-    drawer.send({ type: 'end_drawing' })
+    await finish(drawer, 'a catdog')
     await drawer.stateWhere((s) => s.phase === 'judging')
-    const [catId, dogId] = sd.turn!.guesses.map((g) => g.id) as [string, string]
-    drawer.send({ type: 'judge', correctGuessId: catId, funniestGuessId: dogId })
+    const [, dogId] = sd.turn!.guesses.map((g) => g.id) as [string, string]
+    // Correctness is the grader's job now; the drawer only picks a favourite.
+    drawer.send({ type: 'judge', favoriteGuessId: dogId })
 
     const sr = await g2.stateWhere((s) => s.phase === 'reveal')
     expect(sr.turn!.guesses.map((g) => g.playerId)).toEqual([g1.playerId, g2.playerId])
     expect(sr.turn!.intent).toBe('a catdog')
-    expect(sr.players[g1.playerId!]!.score).toBe(DEFAULT_CONFIG.correctPoints)
-    expect(sr.players[g2.playerId!]!.score).toBe(DEFAULT_CONFIG.funniestPoints)
+    // No API key is configured in tests, so the turn goes ungraded and only
+    // the drawer's favourite scores.
+    expect(sr.turn!.grading).toBe('unavailable')
+    expect(sr.turn!.correctGuessId).toBeNull()
+    expect(sr.players[g1.playerId!]!.score).toBe(0)
+    expect(sr.players[g2.playerId!]!.score).toBe(DEFAULT_CONFIG.favoritePoints)
     expect(sr.players[drawer.playerId!]!.score).toBe(0)
 
     // Organizer advances; the new drawer gets a fresh (reset) stroke buffer.
@@ -524,7 +536,7 @@ describe('game flow', () => {
     const batch = [stroke('down', 0.3, 0.3), stroke('up')]
     drawer.send({ type: 'stroke', strokes: batch })
     await guessers[0]!.next('strokes')
-    drawer.send({ type: 'end_drawing' })
+    await finish(drawer)
     await drawer.stateWhere((s) => s.phase === 'reveal')
 
     const r = await SELF.fetch(`${BASE}/api/rooms/${code}/turns/0/strokes`)
@@ -535,7 +547,7 @@ describe('game flow', () => {
 
   it('serves an empty array for a turn nobody drew on', async () => {
     const { code, drawer, a } = await startedRoom()
-    drawer.send({ type: 'end_drawing' })
+    await finish(drawer)
     await a.stateWhere((s) => s.phase === 'reveal')
     const r = await SELF.fetch(`${BASE}/api/rooms/${code}/turns/0/strokes`)
     expect(r.status).toBe(200)
@@ -636,7 +648,7 @@ describe('garbage collection', () => {
     // Burn through the round by hand: three drawers, no guesses, organizer advances.
     let drawerId = drawer.playerId!
     for (let i = 0; i < 3; i++) {
-      byId(drawerId).send({ type: 'end_drawing' })
+      await finish(byId(drawerId))
       await a.stateWhere((st) => st.phase === 'reveal')
       a.send({ type: 'advance' })
       if (i < 2) {

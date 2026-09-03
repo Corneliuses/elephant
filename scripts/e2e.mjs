@@ -86,6 +86,14 @@ async function whoDraws(by, viewer) {
   return Object.entries(by).find(([, p]) => p === viewer)[0]
 }
 
+/** The drawer must say what it is before "Done drawing" unlocks. */
+async function finishDrawing(page, intent = 'a giraffe on a jet ski') {
+  await page.getByLabel('What you are drawing').fill(intent)
+  const done = page.getByRole('button', { name: 'Done drawing' })
+  await done.waitFor({ timeout: 10000 })
+  await done.click()
+}
+
 const inkOn = (page, selector = 'canvas') =>
   page.evaluate((sel) => {
     const cv = document.querySelector(sel)
@@ -152,11 +160,10 @@ await run('a full game, start to gallery', async () => {
   await guessers[1].getByRole('button', { name: 'Guess' }).click()
   await drawer.waitForFunction(() => document.body.textContent.includes('2 guesses'), null, { timeout: 10000 })
 
-  await drawer.getByRole('button', { name: 'Done drawing' }).click()
-  await drawer.getByRole('heading', { name: 'Who got it right?' }).waitFor({ timeout: 10000 })
+  await finishDrawing(drawer, 'a snake on a rollercoaster')
+  await drawer.getByRole('heading', { name: /favourite/i }).waitFor({ timeout: 10000 })
   await guessers[0].getByText('Sit tight…').waitFor({ timeout: 10000 })
-  await drawer.getByRole('button', { name: /snake having/ }).click()
-  await drawer.getByRole('heading', { name: 'Which one is funniest?' }).waitFor({ timeout: 10000 })
+  // One tap now: correctness is graded server-side.
   await drawer.getByRole('button', { name: /worm from Dune/ }).click()
 
   for (const p of Object.values(by)) await atPhase(p, 'reveal')
@@ -166,15 +173,18 @@ await run('a full game, start to gallery', async () => {
     [...document.querySelectorAll('.board li')].map((li) => li.textContent.replace(/\s+/g, ' ').trim()),
   )
   log('  leaderboard:', scores.join(' | '))
+  // No Gemini key in local dev, so the turn goes ungraded and only the
+  // drawer's favourite scores.
   const twos = scores.filter((s) => / 2$/.test(s)).length
-  assert(twos === 2, `expected two players on 2 points, got ${twos}`)
+  assert(twos === 1, `expected exactly one player on 2 points, got ${twos}`)
+  await organizer.getByText(/could not be checked|Nobody got it right|marks the answer/).waitFor({ timeout: 10000 })
 
   // Play out the remaining turns.
   await organizer.getByRole('button', { name: 'Next' }).click()
   for (let i = 1; i < 3; i++) {
     await atPhase(organizer, 'drawing')
     const who = await whoDraws(by, organizer)
-    await by[who].getByRole('button', { name: 'Done drawing' }).click()
+    await finishDrawing(by[who])
     await atPhase(organizer, 'reveal')
     await organizer.getByRole('button', { name: 'Next' }).click()
   }
@@ -215,7 +225,7 @@ await run('judging times out with no awards', async () => {
 
   await guesser.getByLabel('Your guess').fill('nobody will judge this')
   await guesser.getByRole('button', { name: 'Guess' }).click()
-  await drawer.getByRole('button', { name: 'Done drawing' }).click()
+  await finishDrawing(drawer)
   await atPhase(drawer, 'judging')
 
   // The drawer walks away. Everyone should still reach the reveal, scoreless.
@@ -256,7 +266,7 @@ await run('a second round can be started', async () => {
   for (let i = 0; i < 3; i++) {
     await atPhase(organizer, 'drawing')
     const who = await whoDraws(by, organizer)
-    await by[who].getByRole('button', { name: 'Done drawing' }).click()
+    await finishDrawing(by[who])
     await atPhase(organizer, 'reveal')
     await organizer.getByRole('button', { name: 'Next' }).click()
   }
@@ -269,6 +279,22 @@ await run('a second round can be started', async () => {
   const phase = await organizer.evaluate(() => document.body.dataset.phase)
   assert(phase === 'drawing', 'round two did not start')
   log('  round two under way')
+})
+
+await run('the drawer cannot finish without saying what it is', async () => {
+  const { by, organizer } = await startedRoom({ drawingMs: 60_000 })
+  const drawer = by[await whoDraws(by, organizer)]
+
+  const done = drawer.getByRole('button', { name: /Say what it is first/ })
+  await done.waitFor({ timeout: 10000 })
+  assert(await done.isDisabled(), 'Done was enabled with no intent set')
+
+  await drawer.getByLabel('What you are drawing').fill('an elephant, obviously')
+  await drawer.getByRole('button', { name: 'Done drawing' }).waitFor({ timeout: 10000 })
+  await drawer.getByRole('button', { name: 'Done drawing' }).click()
+  await atPhase(drawer, 'reveal')
+  await drawer.getByText(/an elephant, obviously/).waitFor({ timeout: 10000 })
+  log('  gated until the note was written, then accepted it')
 })
 
 // ---------------------------------------------------------------------------

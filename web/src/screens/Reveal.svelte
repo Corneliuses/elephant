@@ -11,12 +11,12 @@
 
   function badgeFor(id: string) {
     const c = id === turn.correctGuessId
-    const f = id === turn.funniestGuessId
-    return c && f ? 'both' : c ? 'correct' : f ? 'funniest' : null
+    const f = id === turn.favoriteGuessId
+    return c && f ? 'both' : c ? 'correct' : f ? 'favorite' : null
   }
 
   const scorers = $derived(
-    [turn.correctGuessId, turn.funniestGuessId]
+    [turn.correctGuessId, turn.favoriteGuessId]
       .map((id) => turn.guesses.find((g) => g.id === id)?.playerId)
       .filter((x): x is string => !!x),
   )
@@ -61,10 +61,19 @@
     <p class="intent" in:scale={{ duration: 340, start: 0.8 }}>
       {#if turn.intent}
         It was… <strong>{turn.intent}</strong>
-      {:else if turn.guesses.length === 0}
-        Nobody guessed.
       {:else}
         {drawer?.name} never said what it was.
+      {/if}
+    </p>
+    <p class="verdict">
+      {#if turn.grading === 'pending'}
+        Still checking the answers…
+      {:else if turn.grading === 'unavailable'}
+        Answers could not be checked this turn.
+      {:else if turn.correctGuessId}
+        ✓ marks the answer that got it.
+      {:else}
+        Nobody got it right.
       {/if}
     </p>
   {/if}
@@ -91,5 +100,6 @@
   .list { display: grid; gap: 0.5rem; }
   .intent { margin: 0; text-align: center; font-size: 1.15rem; font-weight: 700; }
   .intent strong { font-weight: 900; }
+  .verdict { margin: 0; text-align: center; font-size: 0.85rem; font-weight: 800; color: var(--ink-soft); }
   .spacer { flex: 1; }
 </style>

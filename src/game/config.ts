@@ -9,5 +9,6 @@ export const DEFAULT_CONFIG: GameConfig = {
   guessMaxLen: 100,
   nameMaxLen: 24,
   correctPoints: 2,
-  funniestPoints: 2,
+  favoritePoints: 2,
+  gradingMs: 10_000,
 }

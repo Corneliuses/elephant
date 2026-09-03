@@ -5,9 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 Elephant is a mobile-web party drawing game: one player draws for 90 s,
-the others guess, the drawer awards 2 pts for the correct answer and 2 pts
-for the funniest. Read `docs/PROPOSAL.md` for the rules and decisions and
-`docs/DESIGN.md` for the architecture, events table, and client brief.
+the others guess. Correctness is graded by an LLM; the drawer picks their
+favourite. 2 pts each, and one answer can win both. Read
+`docs/PROPOSAL.md` for the rules and decisions and `docs/DESIGN.md` for
+the architecture, events table, grading, and client brief.
 Those two docs are the source of truth; keep them in sync when behaviour
 or decisions change.
 
@@ -83,8 +84,19 @@ Rules that are easy to get wrong when extending:
   `round_end`, `drawerIdx === drawOrder.length`.
 - Organizer promotion picks the earliest-joined *connected* other player;
   a reconnecting former organizer does not reclaim the role.
-- Correct and funniest must be different guesses unless there is exactly
-  one guess. The drawer never scores.
+- The drawer picks only a **favourite** (`judge`). Correctness arrives
+  separately as a `grade` event from the DO, which calls Gemini. One guess
+  may win both awards. The drawer never scores.
+- `set_intent` is **required** before `end_drawing` is accepted: the
+  grader compares guesses against it. A drawing-phase `timeout` still
+  ends the turn without one.
+- `grade` is accepted in `judging` *and* `reveal`, once per turn. During
+  reveal the live turn is already in `turns`, so both must be updated
+  together or they drift.
+- A turn with no guesses is settled `grading: 'done'` by `finishDrawing`;
+  it never reaches `judging`, so nothing would otherwise grade it.
+- `project` hides `correctGuessId` from everyone until reveal, drawer
+  included.
 
 ## Architecture of `src/room/`
 
@@ -108,6 +120,12 @@ re-arms the single alarm via `scheduleAlarm()`.
   collection, then re-arms.
 - Strokes never enter the reducer. Relay happens in `handleStroke`,
   only from the current drawer during `drawing`, never echoed to sender.
+- `maybeGrade()` fires the Gemini call on entering `judging` via
+  `waitUntil`, and `applyGrade` drops the result if the live turn moved on
+  meanwhile. `grader.ts` is pure fetch + parsing and is tested in node
+  (its own vitest project), not in workerd.
+- No `GEMINI_API_KEY` means every turn is `grading: 'unavailable'`. That
+  is the state local dev and the test suites run in.
 - The worker talks to the DO over internal URLs (`https://room/create`,
   `/info`, `/ws`, `/turns/:i/strokes`); the DO learns its room code from
   the `/create` body.

@@ -24,7 +24,9 @@ export type ClientMessage =
   | { type: 'set_intent'; text: string }
   | { type: 'submit_guess'; text: string }
   | { type: 'end_drawing' }
-  | { type: 'judge'; correctGuessId?: GuessId | null; funniestGuessId: GuessId }
+  /** The drawer's only judgement: which answer they liked most. Correctness
+   *  is decided by the grader, server-side. */
+  | { type: 'judge'; favoriteGuessId: GuessId }
   | { type: 'advance' }
   | { type: 'next_round' }
   | { type: 'end_game' }

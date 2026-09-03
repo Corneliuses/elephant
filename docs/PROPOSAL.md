@@ -4,15 +4,17 @@
 
 A mobile-web party game for 3–12 people in the same room. One player draws
 for 90 seconds; everyone else guesses; the drawer picks the correct answer
-and the funniest answer. Points accumulate, the pen passes, and after
+and their favourite answer. Points accumulate, the pen passes, and after
 everyone has drawn the organizer starts a new round or ends the game.
 
 ## Why
 
 Drawing-and-guessing games are reliably fun, but the existing ones are
 either bloated, ad-driven, or reward speed over wit. Elephant makes the
-**funniest** answer worth exactly as much as the **correct** one, so the
-game is as good for people who can't draw as for people who can.
+**favourite** answer worth exactly as much as the **correct** one, so the
+game is as good for people who can't draw as for people who can. And
+because correctness is graded automatically, the drawer never has to
+arbitrate anything but their own taste.
 
 The name comes from the parable of the blind men and the elephant
 (Tittha Sutta). Every guesser sees one piece of the picture and names it
@@ -32,8 +34,10 @@ the game.
    everyone.
 5. **Guess.** Every other player types a guess. Guesses can be edited
    until the timer ends.
-6. **Judge.** The drawer sees anonymous answers in submission order and
-   picks **Correct** (optional) and **Funniest** (required). 2 points each.
+6. **Judge.** Correctness is decided by an LLM comparing the guesses
+   against what the drawer said they were drawing. The drawer's only job
+   is to pick their **favourite** answer. 2 points each, and one answer
+   can win both.
 7. **Reveal.** Everyone sees who wrote what, what the drawer meant, and
    the updated leaderboard.
 8. **Pass the pen.** Next player draws. Late joiners are slotted at the
@@ -66,19 +70,26 @@ Details and the motion vocabulary are in [DESIGN.md](DESIGN.md#client-look-and-f
 
 ## Rules (v1)
 
-- 2 pts for the answer the drawer marks correct (0 or 1 per turn).
-- 2 pts for the answer the drawer marks funniest (exactly 1 per turn if
-  there are any guesses).
-- Correct and funniest must be different players, unless only one guess
-  was submitted.
-- The drawer earns no points. Judging is the reward.
+- 2 pts for the answer **graded correct** — at most one per turn, and when
+  several guesses are right it goes to whoever submitted first.
+- 2 pts for the answer the drawer picks as their **favourite** (exactly 1
+  per turn if there are any guesses).
+- **The same answer can win both**, for 4 points.
+- Correctness is graded by an LLM, not by the drawer. It compares each
+  guess against the drawer's own note of what they drew, so the drawer
+  must write that note before they can finish drawing.
+- If grading fails or is not configured, the turn is recorded as ungraded
+  and only the favourite scores. The game never blocks on it.
+- The drawer earns no points. Picking a favourite is the reward.
 - Minimum 3 players to start. No hard maximum; UI is tuned for ≤12.
 
 ## Decisions already made
 
 | Question | Decision |
 |---|---|
-| Prompts or free draw? | **Free draw.** The drawer may privately note their intent for the reveal. |
+| Prompts or free draw? | **Free draw.** The drawer must note what they drew — the grader needs it, and it is shown at the reveal. |
+| Who decides "correct"? | **An LLM** (Gemini), server-side. The drawer only picks a favourite, so their taste is the only thing they arbitrate. |
+| Several guesses correct? | **First submitted wins**, keeping the payout at 4 points a turn. |
 | Drawer incentive? | **None.** |
 | Platform | **Mobile web / PWA.** No native apps, no TV view in v1. |
 | Backend | **Cloudflare Workers + Durable Objects.** One DO per room. See [DESIGN.md](DESIGN.md). |
@@ -111,7 +122,7 @@ Details and the motion vocabulary are in [DESIGN.md](DESIGN.md#client-look-and-f
 - **Phones lock and Safari drops sockets.** Reconnection must be
   first-class from milestone 2, not retrofitted.
 - **Free draw can produce unguessable drawings.** Mitigated by the
-  funniest award: an unguessable drawing still produces a winner.
+  favourite award: an unguessable drawing still produces a winner.
 - **Animation on low-end phones.** Heavy motion can stutter or drain
   batteries on cheap Androids. Mitigated by animating only `transform` and
   `opacity`, keeping the canvas off the main animation layer, and honouring

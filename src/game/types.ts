@@ -18,10 +18,12 @@ export interface GameConfig {
   guessMaxLen: number
   /** Max length of a name after trimming. */
   nameMaxLen: number
-  /** Points for the guess marked correct. */
+  /** Points for the guess the grader marks correct. */
   correctPoints: number
-  /** Points for the guess marked funniest. */
-  funniestPoints: number
+  /** Points for the guess the drawer picks as their favorite. */
+  favoritePoints: number
+  /** How long the transport may spend grading before giving up, ms. */
+  gradingMs: number
 }
 
 export interface Player {
@@ -41,15 +43,28 @@ export interface Guess {
   submittedAt: number
 }
 
+/**
+ * Whether the correctness verdict has arrived. Grading happens outside the
+ * reducer (it is a network call), so the turn carries its progress.
+ */
+export type Grading = 'pending' | 'done' | 'unavailable'
+
 export interface Turn {
   round: number
   drawerId: PlayerId
-  /** Drawer's private note of what they're drawing. Public from reveal on. */
+  /**
+   * What the drawer says they are drawing. Required before they may finish,
+   * because the grader has nothing to compare guesses against without it.
+   * Private until the reveal.
+   */
   intent: string | null
   /** In submission order. Editing a guess moves it to the end. */
   guesses: Guess[]
+  /** Chosen by the grader, not the drawer. Hidden until the reveal. */
   correctGuessId: GuessId | null
-  funniestGuessId: GuessId | null
+  grading: Grading
+  /** The drawer's pick. May be the same guess as `correctGuessId`. */
+  favoriteGuessId: GuessId | null
   /** True when the turn ended without judging (drawer left or timed out of grace). */
   skipped: boolean
 }
@@ -90,12 +105,13 @@ export type GameEvent =
   | (Base & { type: 'set_intent'; playerId: PlayerId; text: string })
   | (Base & { type: 'submit_guess'; playerId: PlayerId; text: string })
   | (Base & { type: 'end_drawing'; playerId: PlayerId })
-  | (Base & {
-      type: 'judge'
-      playerId: PlayerId
-      correctGuessId?: GuessId | null
-      funniestGuessId: GuessId
-    })
+  | (Base & { type: 'judge'; playerId: PlayerId; favoriteGuessId: GuessId })
+  /**
+   * The grader's verdict, applied by the transport rather than a player.
+   * `correctGuessId` is null when no guess was right; `ok: false` means
+   * grading could not be carried out at all.
+   */
+  | (Base & { type: 'grade'; correctGuessId: GuessId | null; ok: boolean })
   | (Base & { type: 'advance'; playerId: PlayerId })
   | (Base & { type: 'next_round'; playerId: PlayerId; seed: number })
   | (Base & { type: 'end_game'; playerId: PlayerId })

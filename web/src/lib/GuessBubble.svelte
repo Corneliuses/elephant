@@ -14,7 +14,7 @@
     guess: ProjectedGuess
     author?: Player | null | undefined
     mine?: boolean
-    badge?: 'correct' | 'funniest' | 'both' | null
+    badge?: 'correct' | 'favorite' | 'both' | null
     /** Stagger, ms. The cascade is what makes the list feel dealt out. */
     delay?: number
     disabled?: boolean
@@ -26,7 +26,7 @@
       'bubble',
       mine && 'mine',
       (badge === 'correct' || badge === 'both') && 'correct',
-      (badge === 'funniest' || badge === 'both') && 'funniest',
+      (badge === 'favorite' || badge === 'both') && 'favorite',
     ]
       .filter(Boolean)
       .join(' '),
@@ -48,7 +48,7 @@
   {#if badge}
     <span class="badges">
       {#if badge === 'correct' || badge === 'both'}<span class="badge ok">✓</span>{/if}
-      {#if badge === 'funniest' || badge === 'both'}<span class="badge fun">★</span>{/if}
+      {#if badge === 'favorite' || badge === 'both'}<span class="badge fun">★</span>{/if}
     </span>
   {/if}
 {/snippet}
@@ -87,8 +87,8 @@
   .pickable:disabled { opacity: 0.4; cursor: default; }
   .mine { background: var(--sun); }
   .correct { border-color: var(--leaf); background: color-mix(in srgb, var(--leaf) 22%, var(--card)); }
-  .funniest { background: color-mix(in srgb, var(--sun) 55%, var(--card)); }
-  .correct.funniest { background: color-mix(in srgb, var(--sun) 45%, var(--leaf) 25%); }
+  .favorite { background: color-mix(in srgb, var(--sun) 55%, var(--card)); }
+  .correct.favorite { background: color-mix(in srgb, var(--sun) 45%, var(--leaf) 25%); }
 
   .face {
     display: grid;

@@ -7,6 +7,7 @@ import { DurableObject } from 'cloudflare:workers'
 import { DEFAULT_CONFIG } from '../game/config'
 import { apply, createGame, nextAlarmAt, project } from '../game/machine'
 import type { GameConfig, GameEvent, GameState, PlayerId } from '../game/types'
+import { type GradeGuess, gradeGuesses } from './grader'
 import {
   CLOSE_LEFT,
   CLOSE_REPLACED,
@@ -48,6 +49,8 @@ export class RoomDO extends DurableObject<Env> {
   private strokes: Stroke[] = []
   /** Which index in `game.turns` the buffer belongs to; -1 when no live turn. */
   private strokesTurn = -1
+  /** The turn index grading is already running for, so it starts only once. */
+  private gradingTurn: number | null = null
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -305,6 +308,52 @@ export class RoomDO extends DurableObject<Env> {
     if (resetStrokes) this.broadcast({ type: 'strokes', strokes: [], reset: true })
     this.broadcastState()
     await this.scheduleAlarm()
+    this.maybeGrade()
+  }
+
+  /**
+   * Kick off grading when a turn reaches judging. It runs concurrently with
+   * the drawer choosing their favourite, so neither waits for the other.
+   */
+  private maybeGrade(): void {
+    const game = this.game
+    if (!game?.turn) return
+    if (game.phase !== 'judging' || game.turn.grading !== 'pending') return
+
+    const turnIdx = liveTurnIndex(game)
+    if (this.gradingTurn === turnIdx) return
+    this.gradingTurn = turnIdx
+
+    const intent = game.turn.intent
+    const guesses: GradeGuess[] = game.turn.guesses.map((g) => ({ id: g.id, text: g.text }))
+    const key = this.env.GEMINI_API_KEY
+
+    // No key configured, or nothing to grade against: record it and move on
+    // rather than leaving the turn stuck on "checking".
+    if (!key || !intent) {
+      void this.applyGrade(turnIdx, { correctGuessId: null, ok: false })
+      return
+    }
+
+    this.ctx.waitUntil(
+      gradeGuesses(key, intent, guesses, game.config.gradingMs, this.env.GEMINI_MODEL).then((outcome) =>
+        this.applyGrade(turnIdx, outcome),
+      ),
+    )
+  }
+
+  /** Apply a verdict, but only if it still belongs to the live turn. */
+  private async applyGrade(turnIdx: number, outcome: { correctGuessId: string | null; ok: boolean }): Promise<void> {
+    const game = this.game
+    // The turn may have been skipped or advanced while we were waiting.
+    if (!game || liveTurnIndex(game) !== turnIdx) return
+    const r = apply(game, {
+      type: 'grade',
+      now: Date.now(),
+      correctGuessId: outcome.correctGuessId,
+      ok: outcome.ok,
+    })
+    if (!r.error) await this.commit(r.state)
   }
 
   private broadcastState(): void {
@@ -438,13 +487,9 @@ function toGameEvent(msg: Record<string, unknown>, playerId: PlayerId, now: numb
       return { type: 'submit_guess', now, playerId, text }
     }
     case 'judge': {
-      const funniestGuessId = str('funniestGuessId')
-      if (funniestGuessId === null) return 'invalid message: funniestGuessId required'
-      const correct = msg['correctGuessId']
-      if (correct !== undefined && correct !== null && typeof correct !== 'string') {
-        return 'invalid message: correctGuessId must be a string'
-      }
-      return { type: 'judge', now, playerId, funniestGuessId, correctGuessId: (correct as string | null | undefined) ?? null }
+      const favoriteGuessId = str('favoriteGuessId')
+      if (favoriteGuessId === null) return 'invalid message: favoriteGuessId required'
+      return { type: 'judge', now, playerId, favoriteGuessId }
     }
     case 'end_drawing':
     case 'advance':
@@ -491,7 +536,8 @@ function sanitizeConfig(c: Partial<GameConfig> | undefined): Partial<GameConfig>
     guessMaxLen: clamp(c.guessMaxLen, 1, 500, d.guessMaxLen),
     nameMaxLen: clamp(c.nameMaxLen, 1, 100, d.nameMaxLen),
     correctPoints: clamp(c.correctPoints, 0, 100, d.correctPoints),
-    funniestPoints: clamp(c.funniestPoints, 0, 100, d.funniestPoints),
+    favoritePoints: clamp(c.favoritePoints, 0, 100, d.favoritePoints),
+    gradingMs: clamp(c.gradingMs, 1, 60_000, d.gradingMs),
   }
 }
 

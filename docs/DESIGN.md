@@ -123,7 +123,9 @@ interface Turn {
   intent: string | null             // drawer's private note; public at reveal
   guesses: Guess[]                  // in submission order
   correctGuessId: GuessId | null
-  funniestGuessId: GuessId | null
+  correctGuessId: GuessId | null   // graded, not chosen by the drawer
+  grading: 'pending' | 'done' | 'unavailable'
+  favoriteGuessId: GuessId | null  // the drawer's pick; may be the same guess
   skipped: boolean                  // drawer left / disconnected past grace
 }
 
@@ -139,10 +141,11 @@ All events carry `now` (ms epoch) so the reducer never calls `Date.now()`.
 | `join {playerId, name, avatar}` | client | any but `ended` | Add player (not ready). First player becomes organizer. |
 | `set_ready {playerId, ready}` | client | any but `ended` | Toggle in the lobby. Mid-game only `ready: true` is accepted, and during `drawing`/`judging`/`reveal` it appends the player to `drawOrder`. |
 | `start_game {playerId, seed}` | organizer | `lobby` | Requires ≥3 ready players. Shuffles ready players into `drawOrder` (seeded), starts round 1, turn 1. |
-| `set_intent {playerId, text}` | drawer | `drawing` | Private note of what's being drawn. |
+| `set_intent {playerId, text}` | drawer | `drawing` | What's being drawn. Private until reveal, and **required** before `end_drawing` is accepted. |
 | `submit_guess {playerId, text}` | guesser | `drawing` | Upsert this player's guess. Editing moves it to the end of the order. |
 | `end_drawing {playerId}` | drawer | `drawing` | Early finish → `judging` (or straight to `reveal` if no guesses). |
-| `judge {playerId, correctGuessId?, funniestGuessId}` | drawer | `judging` | Award points → `reveal`. |
+| `judge {playerId, favoriteGuessId}` | drawer | `judging` | Award the favourite → `reveal`. |
+| `grade {correctGuessId, ok}` | DO (grader) | `judging`, `reveal` | Record the correctness verdict and award it. Accepted once per turn, on either side of the drawer's pick. |
 | `advance {playerId}` | organizer | `reveal` | Skip the reveal timer. |
 | `next_round {playerId, seed}` | organizer | `round_end` | New round with all connected players, reshuffled. |
 | `end_game {playerId}` | organizer | `round_end` | → `ended`. |
@@ -156,13 +159,49 @@ the DO can call `storage.setAlarm()` after every change.
 
 ### Scoring rules
 
-- `judge` requires `funniestGuessId` unless the turn has zero guesses
-  (in which case the reducer never enters `judging` at all).
-- `correctGuessId` is optional.
-- `correctGuessId !== funniestGuessId` unless there is exactly one guess.
-- Each award is 2 points to the guess's author.
-- The drawer earns nothing.
-- A skipped turn awards nothing and is recorded with `skipped: true`.
+- `judge` carries only `favoriteGuessId`; the drawer no longer decides
+  correctness. Its author gets `favoritePoints`.
+- `grade` carries the verdict from outside the reducer. When `ok` and a
+  guess is named, its author gets `correctPoints`.
+- **The same guess may win both**, for 4 points. The old "must be
+  different" rule is gone: with correctness graded independently, a
+  drawer cannot hand one player both awards.
+- Each award is 2 points to the guess's author. The drawer earns nothing.
+- A skipped turn awards nothing, and is recorded `skipped: true` with
+  `grading: 'unavailable'`.
+- A turn with no guesses never enters `judging`, so the reducer settles it
+  as `grading: 'done'` on the way to `reveal` rather than leaving it
+  waiting for a verdict nobody will ask for.
+
+## Grading
+
+Correctness is decided by Gemini, called from the DO. This is the only
+third-party dependency in the app, and it is deliberately kept out of the
+reducer: `src/game/` stays pure and receives the answer as a `grade` event.
+
+- On entering `judging`, `RoomDO.maybeGrade()` fires the call through
+  `ctx.waitUntil`, **concurrently with the drawer choosing a favourite**,
+  so neither waits for the other.
+- The verdict is applied only if the live turn is still the one that was
+  graded — a turn can be skipped or advanced while the request is out.
+- `grade` is accepted during `reveal` too, since a slow verdict can land
+  after the drawer has already picked. The reducer keeps `turn` and the
+  recorded `turns[-1]` in step when that happens.
+- Guess text is player-supplied, so it is treated strictly as data:
+  guesses go out as a numbered list and the model replies with numbers,
+  never with ids it could have read out of the text. Out-of-range numbers
+  are discarded. `src/room/grader.ts` holds the prompt, and its wording is
+  asserted in tests.
+- Every failure — no API key, non-200, unreadable body, timeout
+  (`config.gradingMs`) — resolves to `ok: false`, which records the turn
+  as `grading: 'unavailable'` and awards nothing. **The game never blocks
+  on grading and never fails because of it.**
+- When several guesses are correct, the transport picks the
+  earliest-submitted one, keeping the payout at 4 points a turn.
+
+`GEMINI_API_KEY` is a Worker secret (`wrangler secret put`); without it
+the game runs with every turn ungraded. `GEMINI_MODEL` overrides the
+default model without a code change.
 
 ### Turn advancement
 
@@ -260,7 +299,9 @@ by a newer socket for the same player, 4004 room gone.
 
 `project(state, viewerId)` strips: other players' guess authorship during
 `drawing`/`judging`; `intent` unless viewer is the drawer or phase is
-`reveal`+.
+`reveal`+; and `correctGuessId` from **everyone** before the reveal, the
+drawer included — seeing the verdict would colour their favourite pick
+and spoil the moment.
 
 ## Reconnection
 
@@ -297,6 +338,7 @@ socket attachment so it survives hibernation.
 | Judging | 60 s | entering `judging` |
 | Reveal | 8 s | entering `reveal` |
 | Drawer-disconnect grace | 15 s | drawer `disconnect` during `drawing`/`judging` |
+| Grading budget | 10 s | the Gemini request's own timeout, not an alarm |
 
 All durations are constants in `src/game/config.ts`. They can be
 overridden per room at creation (`POST /api/rooms` body); the room tests
@@ -385,7 +427,7 @@ against.
 | Start game | Lobby cards scatter off-screen, the canvas slides up, the drawer's avatar stamps onto it, the 90-s ring snaps full and starts draining. |
 | Timer | Ring drains with a taut easing; last 10 s it pulses and the whole timer shakes harder each second. |
 | Guess submitted | Bubble thunks into the drawer's list with a squash; the guesser's own bubble sticks to their screen with a wiggle. Editing a guess slides it to the end. |
-| End of drawing | Canvas shrinks to a card, answers cascade in one by one (staggered, anonymous). Drawer taps to mark **Correct** (green stamp, screen flash) and **Funniest** (gold burst, confetti). |
+| End of drawing | Canvas shrinks to a card, answers cascade in one by one (staggered, anonymous). The drawer taps one **favourite** (gold burst, confetti) while correctness is graded behind the scenes. |
 | Reveal | Each bubble flips to show its author's avatar. Points spawn as chips, fly to the leaderboard, land with a bump. The drawer's intent unfurls last: *"It was… a giraffe on a jet ski."* |
 | Leaderboard | Rows slide past each other on reorder; the leader's row gets a subtle shimmer; ties wobble. |
 | Round end / final | Winner's card grows and rocks; the gallery deals every drawing out like cards. |
@@ -417,7 +459,7 @@ against.
 
 Bright is not the same as legible. Text and outlines meet WCAG AA contrast
 against every accent. Colour never carries meaning alone (correct is a
-check *and* green; funniest is a star *and* gold). Touch targets ≥ 44 px.
+check *and* green; the favourite is a star *and* gold). Touch targets ≥ 44 px.
 
 ## Open questions
 

@@ -70,6 +70,8 @@ export function apply(state: GameState, event: GameEvent): ApplyResult {
       return endDrawing(state, event)
     case 'judge':
       return judge(state, event)
+    case 'grade':
+      return grade(state, event)
     case 'advance':
       return advance(state, event)
     case 'next_round':
@@ -181,35 +183,54 @@ function submitGuess(state: GameState, ev: Ev<'submit_guess'>): ApplyResult {
 function endDrawing(state: GameState, ev: Ev<'end_drawing'>): ApplyResult {
   if (state.phase !== 'drawing' || !state.turn) return fail(state, 'not in drawing phase')
   if (ev.playerId !== state.turn.drawerId) return fail(state, 'only the drawer can end drawing')
+  // The grader compares guesses against this, so there is nothing to grade
+  // without it. The client keeps "Done" disabled until it is set.
+  if (state.turn.intent === null) return fail(state, 'say what you are drawing first')
   return ok(finishDrawing(state, ev.now))
 }
 
 // --- Judging ---------------------------------------------------------------
 
+/** The drawer's only call: which answer they liked most. */
 function judge(state: GameState, ev: Ev<'judge'>): ApplyResult {
   if (state.phase !== 'judging' || !state.turn) return fail(state, 'not in judging phase')
   const turn = state.turn
   if (ev.playerId !== turn.drawerId) return fail(state, 'only the drawer can judge')
 
-  const funniest = turn.guesses.find((g) => g.id === ev.funniestGuessId)
-  if (!funniest) return fail(state, 'unknown guess id')
-  const correctId = ev.correctGuessId ?? null
-  const correct = correctId === null ? null : turn.guesses.find((g) => g.id === correctId)
-  if (correctId !== null && !correct) return fail(state, 'unknown guess id')
-  if (correct && correct.id === funniest.id && turn.guesses.length > 1) {
-    return fail(state, 'correct and funniest must be different guesses')
+  const favorite = turn.guesses.find((g) => g.id === ev.favoriteGuessId)
+  if (!favorite) return fail(state, 'unknown guess id')
+
+  // The same guess may be both correct and the favorite, and then earns both.
+  const next = addScore(state, favorite.playerId, state.config.favoritePoints)
+  return ok(enterReveal({ ...next, turn: { ...turn, favoriteGuessId: favorite.id } }, ev.now))
+}
+
+/**
+ * The grader's verdict, applied by the transport. Accepted during judging or
+ * reveal: grading runs concurrently with the drawer's choice, so it can land
+ * on either side of it.
+ */
+function grade(state: GameState, ev: Ev<'grade'>): ApplyResult {
+  const live = state.turn
+  if (!live) return fail(state, 'no turn to grade')
+  if (state.phase !== 'judging' && state.phase !== 'reveal') return fail(state, 'not gradeable now')
+  if (live.grading !== 'pending') return fail(state, 'already graded')
+
+  const correct = ev.correctGuessId === null ? null : live.guesses.find((g) => g.id === ev.correctGuessId)
+  if (ev.correctGuessId !== null && !correct) return fail(state, 'unknown guess id')
+
+  const turn: Turn = {
+    ...live,
+    grading: ev.ok ? 'done' : 'unavailable',
+    correctGuessId: ev.ok ? (correct?.id ?? null) : null,
   }
-
-  let next = state
-  if (correct) next = addScore(next, correct.playerId, state.config.correctPoints)
-  next = addScore(next, funniest.playerId, state.config.funniestPoints)
-
-  return ok(
-    enterReveal(
-      { ...next, turn: { ...turn, correctGuessId: correct?.id ?? null, funniestGuessId: funniest.id } },
-      ev.now,
-    ),
-  )
+  let next: GameState = { ...state, turn }
+  // During reveal the live turn is already recorded, so keep both in step.
+  if (state.phase === 'reveal') {
+    next = { ...next, turns: [...state.turns.slice(0, -1), turn] }
+  }
+  if (correct && ev.ok) next = addScore(next, correct.playerId, state.config.correctPoints)
+  return ok(next)
 }
 
 // --- Reveal / round end ----------------------------------------------------
@@ -354,7 +375,8 @@ function beginTurn(state: GameState, idx: number, now: number): GameState {
         intent: null,
         guesses: [],
         correctGuessId: null,
-        funniestGuessId: null,
+        grading: 'pending',
+        favoriteGuessId: null,
         skipped: false,
       }
       return {
@@ -376,7 +398,8 @@ function beginTurn(state: GameState, idx: number, now: number): GameState {
           intent: null,
           guesses: [],
           correctGuessId: null,
-          funniestGuessId: null,
+          grading: 'unavailable',
+          favoriteGuessId: null,
           skipped: true,
         },
       ],
@@ -395,7 +418,12 @@ function beginTurn(state: GameState, idx: number, now: number): GameState {
 
 /** Drawing is over: judge if there is anything to judge, else straight to reveal. */
 function finishDrawing(state: GameState, now: number): GameState {
-  if (!state.turn || state.turn.guesses.length === 0) return enterReveal(state, now)
+  if (!state.turn || state.turn.guesses.length === 0) {
+    // Nothing to grade, so settle it here rather than leaving the turn
+    // waiting for a verdict that will never be asked for.
+    const settled = state.turn ? { ...state, turn: { ...state.turn, grading: 'done' as const } } : state
+    return enterReveal(settled, now)
+  }
   return { ...state, phase: 'judging', timerEndsAt: now + state.config.judgingMs }
 }
 
@@ -414,7 +442,7 @@ function enterReveal(state: GameState, now: number): GameState {
 
 /** Abandon the live turn (drawer gone) and record it as skipped. */
 function recordSkipped(state: GameState): GameState {
-  const turn: Turn = { ...state.turn!, skipped: true }
+  const turn: Turn = { ...state.turn!, skipped: true, grading: 'unavailable' }
   return { ...state, turn: null, turns: [...state.turns, turn], graceEndsAt: null }
 }
 
@@ -473,6 +501,9 @@ export function project(state: GameState, viewerId: PlayerId | null): ProjectedS
   const projectTurn = (t: Turn, everything: boolean): ProjectedTurn => ({
     ...t,
     intent: everything || t.drawerId === viewerId ? t.intent : null,
+    // Nobody sees the verdict before the reveal, drawer included: it would
+    // colour their favourite pick and spoil the moment.
+    correctGuessId: everything ? t.correctGuessId : null,
     guesses: t.guesses.map((g) => ({
       ...g,
       playerId: everything || g.playerId === viewerId ? g.playerId : null,

@@ -10,22 +10,16 @@
   const game = $derived(room.game!)
   const turn = $derived(game.turn!)
   const drawer = $derived(game.players[turn.drawerId])
-  const only = $derived(turn.guesses.length === 1)
 
-  // Two taps, not a dual-select: "which is right?" then "which is funniest?".
-  let correctId = $state<string | null>(null)
-  let step = $state<'correct' | 'funniest' | 'sent'>('correct')
+  // One tap: the drawer only picks a favourite. Correctness is graded
+  // server-side and stays hidden from everyone until the reveal.
+  let sent = $state(false)
   let bursting = $state(false)
 
-  function pickCorrect(id: string | null) {
-    correctId = id
-    step = 'funniest'
-  }
-
-  function pickFunniest(id: string) {
-    step = 'sent'
+  function pickFavorite(id: string) {
+    sent = true
     bursting = true
-    room.send({ type: 'judge', correctGuessId: correctId, funniestGuessId: id })
+    room.send({ type: 'judge', favoriteGuessId: id })
   }
 </script>
 
@@ -33,7 +27,7 @@
   <header>
     <div class="who">
       <span class="face" style="background: {accentOf(turn.drawerId)}">{drawer?.avatar}</span>
-      <strong>{room.isDrawer ? 'Your call' : `${drawer?.name} is choosing`}</strong>
+      <strong>{room.isDrawer ? 'Your pick' : `${drawer?.name} is choosing`}</strong>
     </div>
     {#if game.timerEndsAt}
       <Timer endsAt={game.timerEndsAt} total={game.config.judgingMs} />
@@ -47,12 +41,15 @@
 
   {#if room.isDrawer}
     <div class="prompt" in:fly={{ y: -10, duration: 220 }}>
-      {#if step === 'correct'}
-        <h2>Who got it right?</h2>
-      {:else if step === 'funniest'}
-        <h2>Which one is funniest?</h2>
-      {:else}
-        <h2>Nice.</h2>
+      <h2>{sent ? 'Nice.' : 'Which one is your favourite?'}</h2>
+      {#if !sent}
+        <p class="hint">
+          {#if turn.grading === 'pending'}
+            Checking who got it right…
+          {:else}
+            Who got it right is already settled.
+          {/if}
+        </p>
       {/if}
     </div>
   {:else}
@@ -65,18 +62,10 @@
         {guess}
         mine={guess.playerId === game.you}
         delay={i * 70}
-        badge={guess.id === correctId ? 'correct' : null}
-        disabled={step === 'funniest' && guess.id === correctId && !only}
-        onpick={room.isDrawer && step !== 'sent'
-          ? () => (step === 'correct' ? pickCorrect(guess.id) : pickFunniest(guess.id))
-          : undefined}
+        onpick={room.isDrawer && !sent ? () => pickFavorite(guess.id) : undefined}
       />
     {/each}
   </div>
-
-  {#if room.isDrawer && step === 'correct'}
-    <button class="btn ghost wide" onclick={() => pickCorrect(null)}>Nobody got it</button>
-  {/if}
 
   {#if bursting}<Burst />{/if}
 </div>
@@ -97,6 +86,7 @@
   /* Keep the drawing visible but subordinate. */
   .shrunk { width: 45%; max-width: 190px; margin: 0 auto; }
   .prompt { text-align: center; }
+  .hint { margin: 0.15rem 0 0; font-size: 0.85rem; font-weight: 700; color: var(--ink-soft); }
   .waiting { margin: 0; text-align: center; font-weight: 800; color: var(--ink-soft); }
   .list { display: grid; gap: 0.5rem; overflow-y: auto; }
 </style>

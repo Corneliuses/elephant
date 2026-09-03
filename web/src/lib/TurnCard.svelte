@@ -9,7 +9,7 @@
   const game = $derived(room.game!)
   const drawer = $derived(game.players[turn.drawerId])
   const correct = $derived(turn.guesses.find((g) => g.id === turn.correctGuessId) ?? null)
-  const funniest = $derived(turn.guesses.find((g) => g.id === turn.funniestGuessId) ?? null)
+  const favorite = $derived(turn.guesses.find((g) => g.id === turn.favoriteGuessId) ?? null)
 
   let strokes = $state<Stroke[]>([])
   let loaded = false
@@ -42,7 +42,7 @@
     <span class="by">{drawer?.avatar} {drawer?.name}</span>
     {#if turn.intent}<em class="was">“{turn.intent}”</em>{/if}
     {#if correct}<span class="line"><span class="pip ok">✓</span>{correct.text}</span>{/if}
-    {#if funniest}<span class="line"><span class="pip fun">★</span>{funniest.text}</span>{/if}
+    {#if favorite}<span class="line"><span class="pip fun">★</span>{favorite.text}</span>{/if}
   </figcaption>
 </figure>
 

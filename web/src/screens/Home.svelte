@@ -30,7 +30,7 @@
   <div class="hero">
     <div class="logo">🐘</div>
     <h1>Elephant</h1>
-    <p class="tag">Draw badly. Guess wildly. Reward the funniest.</p>
+    <p class="tag">Draw badly. Guess wildly. Reward your favourite.</p>
   </div>
 
   <div class="actions">

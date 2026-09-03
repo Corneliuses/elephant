@@ -1,8 +1,8 @@
 # Elephant
 
 A phones-in-a-circle drawing game. One person draws for 90 seconds, everyone
-else guesses, and the drawer awards points for the **correct** answer and the
-**funniest** answer.
+else guesses. The **correct** answer is graded automatically; the drawer picks
+their **favourite**. Two points each, and one answer can win both.
 
 Named for the parable of the blind men and the elephant (Tittha Sutta): each
 guesser feels one part of the picture and names it with confidence. Only the

@@ -17,6 +17,8 @@
   let color = $state(COLORS[0]!)
   let width = $state(WIDTHS[1]!)
   let intent = $state('')
+  /** The grader needs this, so finishing is gated on it. */
+  const canFinish = $derived(intent.trim().length > 0)
   let guess = $state('')
 
   // Network sends are batched; local painting is not. The drawer sees ink in
@@ -60,6 +62,20 @@
   function onIntent() {
     if (intentTimer) clearTimeout(intentTimer)
     intentTimer = setTimeout(() => room.send({ type: 'set_intent', text: intent }), 400)
+  }
+
+  /**
+   * Flush the debounced note before finishing. The button unlocks on local
+   * state, so a fast tap would otherwise reach the server before the intent
+   * does and be rejected.
+   */
+  function finish() {
+    if (intentTimer) {
+      clearTimeout(intentTimer)
+      intentTimer = null
+    }
+    room.send({ type: 'set_intent', text: intent })
+    room.send({ type: 'end_drawing' })
   }
 
   $effect(() => {
@@ -125,15 +141,20 @@
 
     <input
       class="field"
+      class:needed={!canFinish}
       bind:value={intent}
       oninput={onIntent}
-      placeholder="What is it? (only you can see this)"
+      placeholder="What is it? (needed, and only you see it)"
       maxlength="100"
       aria-label="What you are drawing"
     />
 
-    <button class="btn primary wide" onclick={() => room.send({ type: 'end_drawing' })}>
-      Done drawing
+    <button
+      class="btn primary wide"
+      disabled={!canFinish}
+      onclick={finish}
+    >
+      {canFinish ? 'Done drawing' : 'Say what it is first'}
     </button>
   {:else}
     <form class="guessbar" onsubmit={submitGuess}>
@@ -208,6 +229,7 @@
   .size:active { transform: scale(0.9); }
   .wipe { font-weight: 900; }
 
+  .field.needed { border-color: var(--hot); }
   .guessbar { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; }
   .mine {
     display: grid;

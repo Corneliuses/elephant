@@ -37,6 +37,13 @@ function ready(playerId: PlayerId, ready = true, now = T0): GameEvent {
 function guess(playerId: PlayerId, text: string, now = T0 + 1000): GameEvent {
   return { type: 'submit_guess', now, playerId, text }
 }
+function intent(playerId: PlayerId, text = 'a giraffe on a jet ski', now = T0 + 20): GameEvent {
+  return { type: 'set_intent', now, playerId, text }
+}
+/** Finishing requires an intent, so most fixtures set one first. */
+function done(playerId: PlayerId, now = T0 + 500): GameEvent[] {
+  return [intent(playerId, 'a giraffe on a jet ski', now - 1), { type: 'end_drawing', now, playerId }]
+}
 
 /** Lobby with players a, b, c, d — a is organizer; a, b, c ready; d not ready. */
 function lobby(): GameState {
@@ -226,7 +233,8 @@ describe('start_game', () => {
       intent: null,
       guesses: [],
       correctGuessId: null,
-      funniestGuessId: null,
+      grading: 'pending',
+      favoriteGuessId: null,
       skipped: false,
     })
     expect(s.timerEndsAt).toBe(T0 + 10 + CFG.drawingMs)
@@ -253,7 +261,7 @@ describe('set_intent', () => {
   })
 
   it('rejects outside the drawing phase', () => {
-    const s = run(drawing(), guess('b', 'cat'), { type: 'end_drawing', now: T0 + 30, playerId: 'a' })
+    const s = run(drawing(), guess('b', 'cat'), ...done('a', T0 + 30))
     expect(s.phase).toBe('judging')
     expect(fails(s, { type: 'set_intent', now: T0, playerId: 'a', text: 'x' })).toMatch(/drawing/)
   })
@@ -298,26 +306,36 @@ describe('submit_guess', () => {
   })
 
   it('rejects outside the drawing phase', () => {
-    const s = run(drawing(), guess('b', 'cat'), { type: 'end_drawing', now: T0 + 30, playerId: 'a' })
+    const s = run(drawing(), guess('b', 'cat'), ...done('a', T0 + 30))
     expect(fails(s, guess('c', 'late'))).toMatch(/drawing/)
   })
 })
 
 describe('end_drawing', () => {
   it('moves to judging with a judging timer when there are guesses', () => {
-    const s = run(drawing(), guess('b', 'cat'), { type: 'end_drawing', now: T0 + 500, playerId: 'a' })
+    const s = run(drawing(), guess('b', 'cat'), ...done('a'))
     expect(s.phase).toBe('judging')
     expect(s.timerEndsAt).toBe(T0 + 500 + CFG.judgingMs)
   })
 
   it('skips straight to reveal when there are no guesses', () => {
-    const s = run(drawing(), { type: 'end_drawing', now: T0 + 500, playerId: 'a' })
+    const s = run(drawing(), ...done('a'))
     expect(s.phase).toBe('reveal')
     expect(s.timerEndsAt).toBe(T0 + 500 + CFG.revealMs)
     expect(s.turn!.correctGuessId).toBeNull()
-    expect(s.turn!.funniestGuessId).toBeNull()
+    expect(s.turn!.favoriteGuessId).toBeNull()
+    // Nothing to grade: settled here, not left waiting for a verdict.
+    expect(s.turn!.grading).toBe('done')
     expect(s.turn!.skipped).toBe(false)
     expect(s.turns).toHaveLength(1)
+  })
+
+  it('refuses until the drawer has said what it is', () => {
+    // The grader has nothing to compare against without this.
+    const s = run(drawing(), guess('b', 'cat'))
+    expect(fails(s, { type: 'end_drawing', now: T0 + 500, playerId: 'a' })).toMatch(/drawing/)
+    const s2 = run(s, intent('a'))
+    expect(run(s2, { type: 'end_drawing', now: T0 + 500, playerId: 'a' }).phase).toBe('judging')
   })
 
   it('rejects non-drawers', () => {
@@ -333,7 +351,7 @@ describe('timeout during drawing', () => {
     expect(r.state).toBe(s)
   })
 
-  it('ends drawing at the deadline', () => {
+  it('ends drawing at the deadline even with no intent set', () => {
     const s0 = run(drawing(), guess('b', 'cat'))
     const s = run(s0, { type: 'timeout', now: s0.timerEndsAt! })
     expect(s.phase).toBe('judging')
@@ -346,79 +364,131 @@ describe('timeout during drawing', () => {
 // ---------------------------------------------------------------------------
 
 function judging(): GameState {
-  return run(
-    drawing(),
-    guess('b', 'cat', T0 + 100),
-    guess('c', 'dog', T0 + 200),
-    { type: 'end_drawing', now: T0 + 500, playerId: 'a' },
-  )
+  return run(drawing(), guess('b', 'cat', T0 + 100), guess('c', 'dog', T0 + 200), ...done('a'))
 }
 
 describe('judge', () => {
-  it('awards points for correct and funniest and moves to reveal', () => {
+  it('awards the favorite and moves to reveal', () => {
     const s0 = judging()
-    const [bGuess, cGuess] = guessIds(s0) as [GuessId, GuessId]
-    const s = run(s0, { type: 'judge', now: T0 + 600, playerId: 'a', correctGuessId: bGuess, funniestGuessId: cGuess })
+    const [, cGuess] = guessIds(s0) as [GuessId, GuessId]
+    const s = run(s0, { type: 'judge', now: T0 + 600, playerId: 'a', favoriteGuessId: cGuess })
     expect(s.phase).toBe('reveal')
-    expect(s.players['b']!.score).toBe(CFG.correctPoints)
-    expect(s.players['c']!.score).toBe(CFG.funniestPoints)
+    expect(s.turn!.favoriteGuessId).toBe(cGuess)
+    expect(s.players['c']!.score).toBe(CFG.favoritePoints)
+    // Correctness is the grader's business, not the drawer's.
+    expect(s.turn!.correctGuessId).toBeNull()
+    expect(s.turn!.grading).toBe('pending')
     expect(s.players['a']!.score).toBe(0)
-    expect(s.turn!.correctGuessId).toBe(bGuess)
-    expect(s.turn!.funniestGuessId).toBe(cGuess)
     expect(s.timerEndsAt).toBe(T0 + 600 + CFG.revealMs)
     expect(s.turns).toHaveLength(1)
     expect(s.turns[0]).toBe(s.turn)
   })
 
-  it('allows no correct answer', () => {
-    const s0 = judging()
-    const [, cGuess] = guessIds(s0) as [GuessId, GuessId]
-    const s = run(s0, { type: 'judge', now: T0 + 600, playerId: 'a', funniestGuessId: cGuess })
-    expect(s.turn!.correctGuessId).toBeNull()
-    expect(s.players['b']!.score).toBe(0)
-    expect(s.players['c']!.score).toBe(CFG.funniestPoints)
-  })
-
-  it('rejects the same guess for both awards when there is more than one guess', () => {
+  it('takes no correct answer from the drawer', () => {
     const s0 = judging()
     const [bGuess] = guessIds(s0) as [GuessId]
-    expect(
-      fails(s0, { type: 'judge', now: T0, playerId: 'a', correctGuessId: bGuess, funniestGuessId: bGuess }),
-    ).toMatch(/different/)
-  })
-
-  it('allows the same guess for both awards when it is the only guess', () => {
-    const s0 = run(drawing(), guess('b', 'cat'), { type: 'end_drawing', now: T0 + 500, playerId: 'a' })
-    const [bGuess] = guessIds(s0) as [GuessId]
-    const s = run(s0, { type: 'judge', now: T0 + 600, playerId: 'a', correctGuessId: bGuess, funniestGuessId: bGuess })
-    expect(s.players['b']!.score).toBe(CFG.correctPoints + CFG.funniestPoints)
+    // The old shape carried correctGuessId; it is no longer part of the event.
+    const s = run(s0, { type: 'judge', now: T0 + 600, playerId: 'a', favoriteGuessId: bGuess })
+    expect(s.players['b']!.score).toBe(CFG.favoritePoints)
   })
 
   it('rejects unknown guess ids', () => {
-    const s0 = judging()
-    const [bGuess] = guessIds(s0) as [GuessId]
-    expect(fails(s0, { type: 'judge', now: T0, playerId: 'a', funniestGuessId: 'nope' })).toMatch(/guess/)
-    expect(fails(s0, { type: 'judge', now: T0, playerId: 'a', correctGuessId: 'nope', funniestGuessId: bGuess })).toMatch(
-      /guess/,
-    )
+    expect(fails(judging(), { type: 'judge', now: T0, playerId: 'a', favoriteGuessId: 'nope' })).toMatch(/guess/)
   })
 
-  it('rejects non-drawers and wrong phase', () => {
+  it('rejects non-drawers and the wrong phase', () => {
     const s0 = judging()
     const [bGuess] = guessIds(s0) as [GuessId]
-    expect(fails(s0, { type: 'judge', now: T0, playerId: 'b', funniestGuessId: bGuess })).toMatch(/drawer/)
-    expect(fails(drawing(), { type: 'judge', now: T0, playerId: 'a', funniestGuessId: 'x' })).toMatch(/judging/)
+    expect(fails(s0, { type: 'judge', now: T0, playerId: 'b', favoriteGuessId: bGuess })).toMatch(/drawer/)
+    expect(fails(drawing(), { type: 'judge', now: T0, playerId: 'a', favoriteGuessId: 'x' })).toMatch(/judging/)
   })
 
-  it('times out with no awards', () => {
+  it('times out with no favorite awarded', () => {
     const s0 = judging()
     const s = run(s0, { type: 'timeout', now: s0.timerEndsAt! })
     expect(s.phase).toBe('reveal')
-    expect(s.turn!.correctGuessId).toBeNull()
-    expect(s.turn!.funniestGuessId).toBeNull()
+    expect(s.turn!.favoriteGuessId).toBeNull()
     expect(s.players['b']!.score).toBe(0)
     expect(s.players['c']!.score).toBe(0)
     expect(s.turns).toHaveLength(1)
+  })
+})
+
+describe('grade', () => {
+  const verdict = (correctGuessId: GuessId | null, ok = true, now = T0 + 550): GameEvent =>
+    ({ type: 'grade', now, correctGuessId, ok })
+
+  it('awards the correct guess and records the verdict', () => {
+    const s0 = judging()
+    const [bGuess] = guessIds(s0) as [GuessId]
+    const s = run(s0, verdict(bGuess))
+    expect(s.turn!.grading).toBe('done')
+    expect(s.turn!.correctGuessId).toBe(bGuess)
+    expect(s.players['b']!.score).toBe(CFG.correctPoints)
+    // Grading does not move the phase along; the drawer still has to choose.
+    expect(s.phase).toBe('judging')
+  })
+
+  it('records that nobody was right', () => {
+    const s = run(judging(), verdict(null))
+    expect(s.turn!.grading).toBe('done')
+    expect(s.turn!.correctGuessId).toBeNull()
+    expect(s.players['b']!.score).toBe(0)
+  })
+
+  it('records that grading could not be done, awarding nothing', () => {
+    const s0 = judging()
+    const [bGuess] = guessIds(s0) as [GuessId]
+    const s = run(s0, verdict(bGuess, false))
+    expect(s.turn!.grading).toBe('unavailable')
+    expect(s.turn!.correctGuessId).toBeNull()
+    expect(s.players['b']!.score).toBe(0)
+  })
+
+  it('lets one guess be both correct and the favorite, earning both', () => {
+    const s0 = judging()
+    const [bGuess] = guessIds(s0) as [GuessId]
+    let s = run(s0, verdict(bGuess))
+    s = run(s, { type: 'judge', now: T0 + 600, playerId: 'a', favoriteGuessId: bGuess })
+    expect(s.players['b']!.score).toBe(CFG.correctPoints + CFG.favoritePoints)
+    expect(s.turn!.correctGuessId).toBe(bGuess)
+    expect(s.turn!.favoriteGuessId).toBe(bGuess)
+  })
+
+  it('still lands when it arrives after the reveal has started', () => {
+    const s0 = judging()
+    const [bGuess, cGuess] = guessIds(s0) as [GuessId, GuessId]
+    let s = run(s0, { type: 'judge', now: T0 + 600, playerId: 'a', favoriteGuessId: cGuess })
+    expect(s.phase).toBe('reveal')
+    s = run(s, verdict(bGuess, true, T0 + 700))
+    expect(s.players['b']!.score).toBe(CFG.correctPoints)
+    // The recorded turn and the live one must not drift apart.
+    expect(s.turns.at(-1)!.correctGuessId).toBe(bGuess)
+    expect(s.turn!.correctGuessId).toBe(bGuess)
+  })
+
+  it('is refused twice', () => {
+    const s0 = judging()
+    const [bGuess] = guessIds(s0) as [GuessId]
+    const s = run(s0, verdict(bGuess))
+    expect(fails(s, verdict(bGuess))).toMatch(/already/)
+  })
+
+  it('rejects an unknown guess id', () => {
+    expect(fails(judging(), verdict('nope'))).toMatch(/guess/)
+  })
+
+  it('is refused before there is anything to grade', () => {
+    expect(fails(drawing(), verdict(null))).toMatch(/gradeable/)
+    expect(fails(lobby(), verdict(null))).toMatch(/turn/)
+  })
+
+  it('is refused on a skipped turn', () => {
+    const s0 = run(drawing(), guess('b', 'cat'), { type: 'disconnect', now: T0 + 100, playerId: 'a' })
+    const s = run(s0, { type: 'timeout', now: s0.graceEndsAt! })
+    expect(s.turns[0]!.grading).toBe('unavailable')
+    // A new turn has begun; the skipped one is history and cannot be graded.
+    expect(fails(s, verdict(null))).toMatch(/gradeable|already/)
   })
 })
 
@@ -429,7 +499,12 @@ describe('judge', () => {
 function reveal(): GameState {
   const s0 = judging()
   const [bGuess, cGuess] = guessIds(s0) as [GuessId, GuessId]
-  return run(s0, { type: 'judge', now: T0 + 600, playerId: 'a', correctGuessId: bGuess, funniestGuessId: cGuess })
+  // A graded turn with a favourite picked: the state the reveal renders.
+  return run(
+    s0,
+    { type: 'grade', now: T0 + 550, correctGuessId: bGuess, ok: true },
+    { type: 'judge', now: T0 + 600, playerId: 'a', favoriteGuessId: cGuess },
+  )
 }
 
 /** Play through all three turns of round 1 to reach round_end. */
@@ -438,12 +513,12 @@ function roundEnd(): GameState {
   // Turn 2: b draws
   s = run(s, { type: 'advance', now: T0 + 700, playerId: 'a' })
   expect(drawerOf(s)).toBe('b')
-  s = run(s, guess('a', 'x', T0 + 710), { type: 'end_drawing', now: T0 + 720, playerId: 'b' })
-  s = run(s, { type: 'judge', now: T0 + 730, playerId: 'b', funniestGuessId: guessIds(s)[0]! })
+  s = run(s, guess('a', 'x', T0 + 710), ...done('b', T0 + 720))
+  s = run(s, { type: 'judge', now: T0 + 730, playerId: 'b', favoriteGuessId: guessIds(s)[0]! })
   // Turn 3: c draws
   s = run(s, { type: 'advance', now: T0 + 740, playerId: 'a' })
   expect(drawerOf(s)).toBe('c')
-  s = run(s, { type: 'end_drawing', now: T0 + 750, playerId: 'c' })
+  s = run(s, ...done('c', T0 + 750))
   s = run(s, { type: 'advance', now: T0 + 760, playerId: 'a' })
   expect(s.phase).toBe('round_end')
   return s
@@ -485,16 +560,16 @@ describe('advance', () => {
   it('preserves scores across turns', () => {
     const s = roundEnd()
     expect(s.players['b']!.score).toBe(CFG.correctPoints)
-    expect(s.players['c']!.score).toBe(CFG.funniestPoints)
-    expect(s.players['a']!.score).toBe(CFG.funniestPoints)
+    expect(s.players['c']!.score).toBe(CFG.favoritePoints)
+    expect(s.players['a']!.score).toBe(CFG.favoritePoints)
   })
 
   it('includes a late-ready player at the end of the round', () => {
     let s = run(reveal(), join('z', T0 + 650), ready('z', true, T0 + 651))
     s = run(s, { type: 'advance', now: T0 + 700, playerId: 'a' }) // b
-    s = run(s, { type: 'end_drawing', now: T0 + 710, playerId: 'b' })
+    s = run(s, ...done('b', T0 + 710))
     s = run(s, { type: 'advance', now: T0 + 720, playerId: 'a' }) // c
-    s = run(s, { type: 'end_drawing', now: T0 + 730, playerId: 'c' })
+    s = run(s, ...done('c', T0 + 730))
     s = run(s, { type: 'advance', now: T0 + 740, playerId: 'a' }) // z
     expect(s.phase).toBe('drawing')
     expect(drawerOf(s)).toBe('z')
@@ -718,7 +793,7 @@ describe('leave', () => {
 
   it('goes to round_end when the last drawer of the round leaves mid-turn', () => {
     let s = run(reveal(), { type: 'advance', now: T0 + 700, playerId: 'a' })
-    s = run(s, { type: 'end_drawing', now: T0 + 710, playerId: 'b' })
+    s = run(s, ...done('b', T0 + 710))
     s = run(s, { type: 'advance', now: T0 + 720, playerId: 'a' })
     expect(drawerOf(s)).toBe('c')
     s = run(s, { type: 'leave', now: T0 + 730, playerId: 'c' })
@@ -781,10 +856,12 @@ describe('project', () => {
   })
 
   it('reveals everything from the reveal phase on', () => {
-    const s = run(
-      judging(),
-      { type: 'judge', now: T0 + 600, playerId: 'a', funniestGuessId: guessIds(judging())[0]! },
-    )
+    const s = run(judging(), {
+      type: 'judge',
+      now: T0 + 600,
+      playerId: 'a',
+      favoriteGuessId: guessIds(judging())[0]!,
+    })
     const forB = project(s, 'b')
     expect(forB.turn!.guesses.map((g) => g.playerId)).toEqual(['b', 'c'])
   })

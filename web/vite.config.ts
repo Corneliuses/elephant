@@ -17,7 +17,7 @@ export default defineConfig({
       manifest: {
         name: 'Elephant',
         short_name: 'Elephant',
-        description: 'Draw badly. Guess wildly. Reward the funniest.',
+        description: 'Draw badly. Guess wildly. Reward your favourite.',
         start_url: '/',
         scope: '/',
         display: 'standalone',
