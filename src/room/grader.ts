@@ -12,7 +12,12 @@
  */
 
 const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions'
-const DEFAULT_MODEL = 'gemini-3.8-flash'
+// Matches the `GEMINI_MODEL` var in wrangler.jsonc, which normally supplies
+// this. Only reached when that var is missing, so it should still name a
+// model that works: the free tier counts its request quota per model, and
+// this task is trivial classification against a hard `gradingMs` deadline
+// rather than anything that rewards a heavier reasoner.
+const DEFAULT_MODEL = 'gemini-3.5-flash'
 
 export interface GradeGuess {
   id: string
