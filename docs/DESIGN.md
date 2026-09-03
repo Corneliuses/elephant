@@ -50,8 +50,9 @@ Everything the DO does is thin glue. The rules live in `src/game/`.
 ```
 src/game/         pure state machine — zero I/O, zero Cloudflare imports
 src/room/         RoomDO (sockets, storage, alarm, stroke relay) + wire protocol
-src/worker.ts     router; will also serve static assets                   (milestone 3)
-web/              PWA client: Svelte + Vite                                 (milestone 3)
+src/worker.ts     router + static assets
+web/              PWA client: Svelte 5 + Vite
+scripts/          e2e smoke test, PWA icon generation
 ```
 
 The boundary is `apply(state, event) → { state, error? }`. The DO never
@@ -242,8 +243,10 @@ stamps both; anything the client sends for those is ignored), plus:
 **Server → client.**
 
 - `welcome {playerId, secret}` — once, after a successful `join`.
-- `state {state: ProjectedState}` — full projected state on connect and
-  after every change. Small enough (<10 KB) that diffs aren't worth it.
+- `state {state: ProjectedState, now: number}` — full projected state on
+  connect and after every change. Small enough (<10 KB) that diffs aren't
+  worth it. `now` is the server clock at send time; clients track the
+  offset so a 90-second countdown does not drift with the phone's clock.
 - `strokes {strokes, reset?}` — relay batch, or with `reset: true` the
   full buffer to replace whatever the client has. A reset is sent on
   join/reconnect and (empty) when a new turn starts, **before** the

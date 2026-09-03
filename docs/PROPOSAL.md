@@ -100,10 +100,11 @@ Details and the motion vocabulary are in [DESIGN.md](DESIGN.md#client-look-and-f
 2. **Transport** — Durable Object wrapping the machine; WebSocket protocol;
    reconnection; alarms for timers.
 3. **Client** — Svelte PWA: lobby, canvas, guess input, judging, reveal,
-   leaderboard. Mobile-first. Built animated from the start: the motion
-   system, press feedback, and phase transitions ship with the first
-   usable screen, not after.
-4. **Polish** — gallery/export, reactions, sound design, install prompt.
+   leaderboard, gallery. Mobile-first. Built animated from the start: the
+   motion system, press feedback, and phase transitions ship with the
+   first usable screen, not after. *(done)*
+4. **Polish** — reactions during drawing, sound design, drawing undo,
+   export/share of the gallery.
 
 ## Risks
 

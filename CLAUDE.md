@@ -16,7 +16,7 @@ Decided stack:
 - `src/game/` — pure game state machine (done, tested)
 - `src/room/` — `RoomDO` Durable Object per room + `protocol.ts` wire types (done, tested)
 - `src/worker.ts` — HTTP router; will also serve static assets (done except assets)
-- `web/` — Svelte 5 + Vite PWA client (not started)
+- `web/` — Svelte 5 + Vite PWA client (done: all phases playable)
 
 ## Commands
 
@@ -29,7 +29,12 @@ npx vitest run src/game/machine.test.ts   # one file
 npx vitest run -t "grace carries"         # tests matching a name
 npm run typecheck                         # tsc --noEmit, strict + noUncheckedIndexedAccess + exactOptionalPropertyTypes
 npm run types                             # regenerate worker-configuration.d.ts after editing wrangler.jsonc
-npm run dev                               # wrangler dev
+npm run dev                               # wrangler dev (worker + DO + built assets, :8787)
+npm run dev:web                           # vite, :5173, proxies /api to :8787
+npm run build                             # vite build -> web/dist (deploy needs this first)
+npm run check:web                         # svelte-check
+npm run e2e                               # full game in 3 browsers; needs `npm run dev` running
+node scripts/icons.mjs                    # regenerate PWA icons after changing the mark
 ```
 
 There is no lint or format step yet. `worker-configuration.d.ts` is
@@ -105,7 +110,47 @@ re-arms the single alarm via `scheduleAlarm()`.
   `/info`, `/ws`, `/turns/:i/strokes`); the DO learns its room code from
   the `/create` body.
 
+## Architecture of `web/`
+
+Svelte 5 with runes. `<script>` runs **once** per component instance; the
+compiler updates only the DOM nodes that depend on a changed value. There
+is no re-render, so no memoisation.
+
+- `lib/room.svelte.ts` is the only shared state: a class with `$state`
+  fields, exported as a singleton. No context, no provider — components
+  import `room` and read it. The `.svelte.ts` extension is what enables
+  runes outside a component.
+- It owns the socket: credentials in `localStorage`, reconnect with
+  backoff, and an immediate reconnect on `visibilitychange`/`online`,
+  which is what a phone unlocking actually produces.
+- `lib/clock.svelte.ts` is one rAF loop for every countdown, corrected by
+  the `now` the server stamps on each `state` message.
+- `$shared/*` aliases to `src/*`, so the client imports `ProjectedState`
+  and `ClientMessage` from the worker source. Protocol drift is a type
+  error.
+- `<body data-phase>` mirrors the game phase; the e2e script keys off it.
+
+Rules that are easy to get wrong here:
+
+- **The canvas is not reactive.** `lib/Canvas.svelte` paints imperatively
+  from an `$effect` that watches only `strokes.length` and `epoch`, and
+  paints just the new strokes. `epoch` distinguishes "buffer replaced"
+  from "appended to" — a length check alone misfires. Each segment is
+  stroked on its own, so painting is O(1) per point.
+- Local ink is painted on the pointer event; network sends are batched
+  every 50 ms in `Drawing.svelte`. The server never echoes the drawer's
+  own strokes, so the drawer appends them locally.
+- Taps must answer before the round-trip. `Lobby.svelte` has the pattern:
+  a `pending` override that releases once the server agrees.
+- Animation comes from `svelte/transition`, `svelte/animate` and CSS.
+  Do not add a motion library.
+
 ## Tests
+
+`scripts/e2e.mjs` plays a full game in three real browsers against
+`wrangler dev` and asserts outcomes (scores, pixel-identical relay,
+gallery contents). It has caught two bugs that unit tests and typechecking
+did not. Run it after changing anything in `web/` or the wire protocol.
 
 `src/room/room.test.ts` runs in workerd via `cloudflare:test`. It uses a
 small `Client` class (typed inbox, `next(type)`, `stateWhere(pred)`) and
