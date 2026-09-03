@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Types and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck the worker
+        run: npm run typecheck
+      - name: Typecheck the client
+        run: npm run check:web
+      # The room suite runs in workerd via Miniflare and needs no credentials.
+      - name: Unit tests
+        run: npm test
+      - name: Build the client
+        run: npm run build
+
+  e2e:
+    name: Full game in a browser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Start the worker
+        run: |
+          npx wrangler dev --port 8787 --local > /tmp/wrangler.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf -o /dev/null http://127.0.0.1:8787/; then
+              echo "worker is up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "worker did not start"; cat /tmp/wrangler.log; exit 1
+      - name: Play a full game
+        run: npm run e2e
+      - name: Worker log
+        if: failure()
+        run: cat /tmp/wrangler.log

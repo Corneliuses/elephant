@@ -7,13 +7,18 @@
  * Drives three players through create -> join -> ready -> start -> draw ->
  * guess, and asserts the drawing relays pixel-identically to a guesser.
  */
+import { existsSync } from 'node:fs'
 import { chromium } from 'playwright'
 
 const BASE = process.env.ELEPHANT_URL ?? 'http://127.0.0.1:8787'
-const EXECUTABLE = process.env.PW_CHROMIUM ?? '/opt/pw-browsers/chromium'
+// Use the sandbox's preinstalled Chromium when it is there, otherwise let
+// Playwright pick the browser it downloaded itself (CI runners).
+const PRESET = process.env.PW_CHROMIUM ?? '/opt/pw-browsers/chromium'
+const EXECUTABLE = PRESET && existsSync(PRESET) ? PRESET : null
 const log = (...a) => console.log(...a)
 
 const browser = await chromium.launch(EXECUTABLE ? { executablePath: EXECUTABLE } : {})
+if (!EXECUTABLE) log('using Playwright-managed Chromium')
 const mk = async () => {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } })
   const page = await ctx.newPage()
