@@ -15,7 +15,7 @@ Decided stack:
 
 - `src/game/` — pure game state machine (done, tested)
 - `src/room/` — `RoomDO` Durable Object per room + `protocol.ts` wire types (done, tested)
-- `src/worker.ts` — HTTP router; will also serve static assets (done except assets)
+- `src/worker.ts` — HTTP router (`/api/*`); static assets come from `web/dist` (done)
 - `web/` — Svelte 5 + Vite PWA client (done: all phases playable)
 
 ## Commands

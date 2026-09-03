@@ -13,19 +13,20 @@ drawer knows the whole elephant.
 
 ## Status
 
-Backend done, no UI yet.
+Playable end to end and deployed at
+[elephant.brcornelius.com](https://elephant.brcornelius.com).
 
 - `src/game/` — pure game state machine, tested.
 - `src/room/` — Cloudflare Durable Object per room: WebSockets, storage,
   alarms, stroke relay, plus the wire protocol. Tested in workerd.
-- `src/worker.ts` — HTTP router (`/api/rooms`).
-- `web/` — Svelte 5 PWA client. Not started.
+- `src/worker.ts` — HTTP router (`/api/*`); everything else is served from
+  the built client in `web/dist`.
+- `web/` — Svelte 5 PWA client, installable, every phase playable.
 
 ```sh
 npm install
-npm test          # game core in node, room in workerd
-npm run dev       # wrangler dev
+npm test          # game in node, room in workerd, client in happy-dom
+npm run build     # build the client into web/dist
+npm run dev       # wrangler dev: worker + DO + built assets, :8787
+npm run e2e       # five real-browser scenarios against `npm run dev`
 ```
-
-Deploys to `elephant.brcornelius.com` (Cloudflare Workers). See issue #1
-for the hosting setup.
