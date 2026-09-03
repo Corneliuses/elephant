@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Stroke } from '$shared/room/protocol'
+  import { StrokePainter } from './paint'
 
   let {
     strokes,
@@ -15,79 +16,29 @@
     drawable?: boolean
     color?: string
     width?: number
-    onstrokes?: (batch: Stroke[]) => void
+    onstrokes?: ((batch: Stroke[]) => void) | undefined
   } = $props()
 
   let el: HTMLCanvasElement
-  let ctx: CanvasRenderingContext2D | null = null
-  /** How many strokes are already on screen. */
-  let painted = 0
-  let pen: { x: number; y: number } | null = null
-  let px = 0
+  /** Painting lives outside the reactive graph; see lib/paint.ts. */
+  let painter: StrokePainter | null = null
   let down = false
-
-  function reset(): void {
-    if (!ctx) return
-    ctx.setTransform(1, 0, 0, 1, 0, 0)
-    ctx.clearRect(0, 0, el.width, el.height)
-    ctx.scale(el.width / px, el.width / px)
-    ctx.lineCap = 'round'
-    ctx.lineJoin = 'round'
-    painted = 0
-    pen = null
-  }
-
-  /** Paint one stroke. Each segment is stroked on its own: O(1) per point,
-   *  rather than re-stroking a growing path on every move. */
-  function draw(s: Stroke): void {
-    if (!ctx) return
-    switch (s.t) {
-      case 'clear':
-        ctx.clearRect(0, 0, px, px)
-        pen = null
-        break
-      case 'down':
-        ctx.strokeStyle = s.color
-        ctx.lineWidth = Math.max(1, s.width * px)
-        pen = { x: s.x, y: s.y }
-        // A dot, so a tap leaves a mark even with no movement.
-        ctx.beginPath()
-        ctx.arc(s.x * px, s.y * px, ctx.lineWidth / 2, 0, Math.PI * 2)
-        ctx.fillStyle = s.color
-        ctx.fill()
-        break
-      case 'move':
-        if (!pen) break
-        ctx.beginPath()
-        ctx.moveTo(pen.x * px, pen.y * px)
-        ctx.lineTo(s.x * px, s.y * px)
-        ctx.stroke()
-        pen = { x: s.x, y: s.y }
-        break
-      case 'up':
-        pen = null
-        break
-    }
-  }
-
-  function repaint(): void {
-    reset()
-    for (const s of strokes) draw(s)
-    painted = strokes.length
-  }
 
   function resize(): void {
     const rect = el.getBoundingClientRect()
     if (rect.width === 0) return
     const dpr = Math.min(devicePixelRatio || 1, 2)
-    px = rect.width
     el.width = Math.round(rect.width * dpr)
     el.height = Math.round(rect.width * dpr)
-    repaint()
+    const ctx = el.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    if (painter) painter.resize(rect.width)
+    else painter = new StrokePainter(ctx, rect.width)
+    painter.sync(strokes, epoch)
   }
 
   $effect(() => {
-    ctx = el.getContext('2d')
     const ro = new ResizeObserver(resize)
     ro.observe(el)
     resize()
@@ -95,16 +46,11 @@
   })
 
   // Reading `epoch` and `strokes.length` is the subscription: this re-runs
-  // whenever either changes, painting only what is new.
+  // whenever either changes, and the painter decides what that implies.
   $effect(() => {
     epoch
-    const n = strokes.length
-    if (n < painted) {
-      repaint()
-      return
-    }
-    for (let i = painted; i < n; i++) draw(strokes[i]!)
-    painted = n
+    strokes.length
+    painter?.sync(strokes, epoch)
   })
 
   function at(e: PointerEvent): { x: number; y: number } {

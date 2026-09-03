@@ -25,6 +25,7 @@ npm install
 npm test                                  # both vitest projects
 npx vitest run --project game             # src/game in node
 npx vitest run --project room             # src/room in workerd (Miniflare)
+npx vitest run --project web              # web/src in happy-dom
 npx vitest run src/game/machine.test.ts   # one file
 npx vitest run -t "grace carries"         # tests matching a name
 npm run coverage                          # v8 coverage, game project only (see note below)
@@ -148,10 +149,20 @@ Rules that are easy to get wrong here:
 
 ## Tests
 
-`scripts/e2e.mjs` plays a full game in three real browsers against
-`wrangler dev` and asserts outcomes (scores, pixel-identical relay,
-gallery contents). It has caught two bugs that unit tests and typechecking
-did not. Run it after changing anything in `web/` or the wire protocol.
+`web/src/**/*.test.ts` runs in happy-dom. `room.test.ts` drives the store
+through a `FakeWS` stand-in socket: reconnect backoff, the close-code
+branches (4001 forgets credentials, 4004 stops, 4000 is deliberate), and
+the `visibilitychange` wake-up. `paint.test.ts` covers the repaint
+invariant with a recording fake 2D context — that logic lives in
+`lib/paint.ts` rather than `Canvas.svelte` precisely so it can be tested
+without a browser.
+
+`scripts/e2e.mjs` runs five scenarios in real browsers against
+`wrangler dev`: a full game to the gallery, the drawing timer expiring
+untouched, judging timing out with no awards, a drawer vanishing mid-turn,
+and a second round. Each scenario builds its own room, with short timers
+where it needs them. This has caught bugs that unit tests and typechecking
+did not; run it after changing anything in `web/` or the wire protocol.
 
 `src/room/room.test.ts` runs in workerd via `cloudflare:test`. It uses a
 small `Client` class (typed inbox, `next(type)`, `stateWhere(pred)`) and
@@ -160,10 +171,12 @@ so tests with millisecond timers assert outcomes, not whether
 `runDurableObjectAlarm` returned true. Fixtures call `clear()` on
 inboxes; remember the server sends the stroke reset before the state.
 
-`npm run coverage` deliberately covers **only** the game project. The v8
-provider cannot instrument code executing inside the workerd pool, so
-`src/room/` and `src/worker.ts` report 0% despite being well covered by
-`src/room/room.test.ts`. An aggregate number would be worse than none.
+`npm run coverage` deliberately covers only `src/game/**` and
+`web/src/lib/**/*.ts` — the parts a coverage number means something for.
+The v8 provider cannot instrument code executing inside the workerd pool,
+so `src/room/` reports 0% despite being well covered, and `.svelte`
+components are exercised by `scripts/e2e.mjs`, which coverage cannot see.
+Including either would read as a gap where there is none.
 
 `src/game/machine.test.ts` is organised by event, with helpers at the top
 (`lobby()`, `drawing()`, `judging()`, `reveal()`, `roundEnd()`) that build
