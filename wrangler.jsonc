@@ -3,6 +3,10 @@
   "name": "elephant",
   "main": "src/worker.ts",
   "compatibility_date": "2026-08-15",
+  // The game lives on its custom domain only. Without this, deploying also
+  // tries to publish a *.workers.dev URL, which fails on an account that has
+  // never opened the Workers dashboard (error 10063).
+  "workers_dev": false,
   // Cloudflare creates the DNS record and TLS certificate on deploy.
   // Do not pre-create an `elephant` record on the zone: deploy fails if one exists.
   "routes": [{ "pattern": "elephant.brcornelius.com", "custom_domain": true }],
