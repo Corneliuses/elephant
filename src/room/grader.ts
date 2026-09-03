@@ -77,16 +77,46 @@ export function firstCorrect(guesses: readonly GradeGuess[], numbers: readonly n
 }
 
 /**
+ * Pull the model's JSON text out of an Interactions `steps` list.
+ *
+ * The real reply is a list of steps, not a single string: reasoning comes
+ * first and the answer last, so the *first* step is the wrong one to read.
+ * Only `model_output` steps carry the reply, and its `content` is a list of
+ * parts, so the text parts are concatenated in order.
+ */
+function fromSteps(body: object): string | null {
+  const steps = (body as { steps?: unknown }).steps
+  if (!Array.isArray(steps)) return null
+  let text = ''
+  for (const step of steps) {
+    if (typeof step !== 'object' || step === null) continue
+    if ((step as { type?: unknown }).type !== 'model_output') continue
+    const content = (step as { content?: unknown }).content
+    if (!Array.isArray(content)) continue
+    for (const part of content) {
+      if (typeof part !== 'object' || part === null) continue
+      if ((part as { type?: unknown }).type !== 'text') continue
+      const t = (part as { text?: unknown }).text
+      if (typeof t === 'string') text += t
+    }
+  }
+  return text === '' ? null : text
+}
+
+/**
  * Pull the model's JSON text out of the response envelope.
  *
- * The Interactions API returns it as `output_text`; the older
- * `generateContent` shape nests it under `candidates`. Both are accepted so a
- * change of endpoint does not silently stop grading.
+ * The Interactions API returns it as a `steps` list (see `fromSteps`). The
+ * `output_text` convenience field and the older `generateContent`
+ * `candidates` shape are also accepted, so a change of endpoint does not
+ * silently stop grading.
  */
 function extractText(body: unknown): string | null {
   if (typeof body !== 'object' || body === null) return null
   const direct = (body as { output_text?: unknown }).output_text
   if (typeof direct === 'string') return direct
+  const stepped = fromSteps(body)
+  if (stepped !== null) return stepped
   const candidates = (body as { candidates?: unknown }).candidates
   if (!Array.isArray(candidates)) return null
   const parts = (candidates[0] as { content?: { parts?: unknown } } | undefined)?.content?.parts

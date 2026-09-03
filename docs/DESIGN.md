@@ -198,10 +198,21 @@ reducer: `src/game/` stays pure and receives the answer as a `grade` event.
   on grading and never fails because of it.**
 - When several guesses are correct, the transport picks the
   earliest-submitted one, keeping the payout at 4 points a turn.
+- The Interactions API answers with a `steps` list, not a single string,
+  and a `thought` step comes **before** the `model_output` one that holds
+  the reply. `parseVerdict` selects the `model_output` step and joins its
+  `text` parts; reading `steps[0]` returns the reasoning and grades
+  nothing. The `output_text` and older `generateContent` `candidates`
+  envelopes are still accepted so a change of endpoint cannot silently
+  stop grading.
 
 `GEMINI_API_KEY` is a Worker secret (`wrangler secret put`); without it
 the game runs with every turn ungraded. `GEMINI_MODEL` overrides the
-default model without a code change.
+default model without a code change — worth reaching for, since the
+free tier's request quota is counted per model.
+
+Note that the room tests assert the no-key path, so a `.dev.vars`
+carrying `GEMINI_API_KEY` makes them call Gemini for real and fail.
 
 ### Turn advancement
 

@@ -8,7 +8,20 @@ const guesses: GradeGuess[] = [
   { id: 'g3', text: 'doggo' },
 ]
 
-const reply = (correct: number[]) => ({ output_text: JSON.stringify({ correct }) })
+/**
+ * A reply in the shape the Interactions API really returns: a `steps` list
+ * whose reasoning step comes *before* the model's output. Captured from a live
+ * call to gemini-3.5-flash.
+ */
+const reply = (correct: number[]) => ({
+  status: 'completed',
+  object: 'interaction',
+  model: 'gemini-3.5-flash',
+  steps: [
+    { type: 'thought', signature: 'EpYDCpMDARFNMg' },
+    { type: 'model_output', content: [{ type: 'text', text: JSON.stringify({ correct }) }] },
+  ],
+})
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -79,12 +92,45 @@ describe('parseVerdict', () => {
   })
 
   it('discards non-integers', () => {
+    expect(parseVerdict(reply([1.5, 2]), 3)).toEqual([2])
     expect(parseVerdict({ output_text: JSON.stringify({ correct: [1.5, 'two', null, 2] }) }, 3)).toEqual([2])
   })
 
-  it('also reads the older generateContent envelope', () => {
-    // Tolerating both shapes means a change of endpoint cannot silently
+  it('reads past the reasoning step rather than taking the first one', () => {
+    // The live API puts a `thought` step first and it carries no `content`.
+    // Reading steps[0] instead of the model_output step is what made every
+    // real turn come back ungraded.
+    const body = reply([2])
+    expect(body.steps[0]!.type).toBe('thought')
+    expect(parseVerdict(body, 3)).toEqual([2])
+  })
+
+  it('joins a model output split across several text parts', () => {
+    const split = {
+      steps: [
+        {
+          type: 'model_output',
+          content: [
+            { type: 'text', text: '{"correct"' },
+            { type: 'text', text: ':[3]}' },
+          ],
+        },
+      ],
+    }
+    expect(parseVerdict(split, 3)).toEqual([3])
+  })
+
+  it('ignores non-text parts of a model output', () => {
+    const mixed = {
+      steps: [{ type: 'model_output', content: [{ type: 'image' }, { type: 'text', text: '{"correct":[1]}' }] }],
+    }
+    expect(parseVerdict(mixed, 3)).toEqual([1])
+  })
+
+  it('also reads the output_text and generateContent envelopes', () => {
+    // Tolerating the other shapes means a change of endpoint cannot silently
     // stop grading.
+    expect(parseVerdict({ output_text: '{"correct":[1]}' }, 3)).toEqual([1])
     const nested = { candidates: [{ content: { parts: [{ text: '{"correct":[2]}' }] } }] }
     expect(parseVerdict(nested, 3)).toEqual([2])
   })
@@ -97,6 +143,9 @@ describe('parseVerdict', () => {
     expect(parseVerdict({ output_text: '{"correct":"1"}' }, 3)).toBeNull()
     expect(parseVerdict({ candidates: [] }, 3)).toBeNull()
     expect(parseVerdict({ candidates: [{ content: {} }] }, 3)).toBeNull()
+    // A reply that never got as far as producing output.
+    expect(parseVerdict({ steps: [{ type: 'thought', signature: 'x' }] }, 3)).toBeNull()
+    expect(parseVerdict({ steps: [] }, 3)).toBeNull()
   })
 })
 
