@@ -11,12 +11,13 @@ const guesses: GradeGuess[] = [
 /**
  * A reply in the shape the Interactions API really returns: a `steps` list
  * whose reasoning step comes *before* the model's output. Captured from a live
- * call to gemini-3.5-flash.
+ * call; every flash model tried answered in this same shape, so it is the
+ * envelope that matters here rather than the model that produced it.
  */
 const reply = (correct: number[]) => ({
   status: 'completed',
   object: 'interaction',
-  model: 'gemini-3.5-flash',
+  model: 'gemini-3.5-flash-lite',
   steps: [
     { type: 'thought', signature: 'EpYDCpMDARFNMg' },
     { type: 'model_output', content: [{ type: 'text', text: JSON.stringify({ correct }) }] },
