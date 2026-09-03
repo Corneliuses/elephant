@@ -247,6 +247,17 @@ describe('join', () => {
     expect(state.players[w.playerId]).toMatchObject({ name: 'Ada', avatar: '🦉', ready: false, connected: true })
   })
 
+  it('stamps each state message with the server clock', async () => {
+    const code = await createRoom()
+    const a = await connect(code)
+    a.send({ type: 'join', name: 'A', avatar: 'x' })
+    await a.next('welcome')
+    const before = Date.now()
+    const m = await a.next('state')
+    expect(m.now).toBeGreaterThanOrEqual(before - 1000)
+    expect(m.now).toBeLessThanOrEqual(Date.now() + 1000)
+  })
+
   it('also sends the (empty) stroke buffer on join', async () => {
     const code = await createRoom()
     const a = await connect(code)

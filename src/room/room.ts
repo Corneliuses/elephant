@@ -308,9 +308,10 @@ export class RoomDO extends DurableObject<Env> {
   private broadcastState(): void {
     const game = this.game
     if (!game) return
+    const now = Date.now()
     for (const ws of this.ctx.getWebSockets()) {
       const { playerId } = getAttachment(ws)
-      safeSend(ws, JSON.stringify({ type: 'state', state: project(game, playerId) } satisfies ServerMessage))
+      safeSend(ws, JSON.stringify({ type: 'state', state: project(game, playerId), now } satisfies ServerMessage))
     }
   }
 

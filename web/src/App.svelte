@@ -4,6 +4,7 @@
   import Home from './screens/Home.svelte'
   import Join from './screens/Join.svelte'
   import Lobby from './screens/Lobby.svelte'
+  import Drawing from './screens/Drawing.svelte'
   import Toast from './lib/Toast.svelte'
 
   // Runs whenever router.code changes — Svelte tracks the read, so there is
@@ -34,6 +35,8 @@
   </div>
 {:else if room.game.phase === 'lobby'}
   <Lobby />
+{:else if room.game.phase === 'drawing'}
+  <Drawing />
 {:else}
   <div class="screen center">
     <h1>{room.game.phase}</h1>

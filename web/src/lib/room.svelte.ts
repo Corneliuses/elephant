@@ -9,6 +9,7 @@
 import type { PlayerId, ProjectedState } from '$shared/game/types'
 import { CLOSE_LEFT, CLOSE_ROOM_GONE, CLOSE_UNAUTHORIZED } from '$shared/room/protocol'
 import type { ClientMessage, ServerMessage, Stroke } from '$shared/room/protocol'
+import { clock } from './clock.svelte'
 
 export type Status = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'gone'
 
@@ -53,6 +54,8 @@ class Room {
   status = $state<Status>('idle')
   game = $state<ProjectedState | null>(null)
   strokes = $state<Stroke[]>([])
+  /** Bumped whenever the buffer is replaced, so the canvas knows to repaint. */
+  strokeEpoch = $state(0)
   /** Last server-rejected action, shown then cleared by the UI. */
   error = $state<string | null>(null)
 
@@ -180,11 +183,21 @@ class Room {
         break
       case 'state':
         this.game = msg.state
+        // Phones' clocks drift. Deadlines arrive as server epoch ms, so
+        // track the offset and render countdowns against corrected time.
+        clock.sync(msg.now)
         break
       case 'strokes':
         // A reset means "replace what you have" — sent on join and whenever
         // a new turn starts, always before the state that announces it.
-        this.strokes = msg.reset ? msg.strokes : [...this.strokes, ...msg.strokes]
+        if (msg.reset) {
+          this.strokes = msg.strokes
+          this.strokeEpoch++
+        } else {
+          // Mutating is fine: $state is deeply reactive, and appending beats
+          // rebuilding the array 20x a second during a live drawing.
+          this.strokes.push(...msg.strokes)
+        }
         break
       case 'error':
         this.error = msg.message
