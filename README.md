@@ -26,3 +26,6 @@ npm install
 npm test          # game core in node, room in workerd
 npm run dev       # wrangler dev
 ```
+
+Deploys to `elephant.brcornelius.com` (Cloudflare Workers). See issue #1
+for the hosting setup.
