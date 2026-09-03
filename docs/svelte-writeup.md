@@ -253,6 +253,94 @@ Svelte-specific conclusion, but Svelte components being thin — because the log
 lives in `.svelte.ts` modules and `paint.ts` — is what made "don't unit-test the
 components" a defensible position rather than an excuse.
 
+## So how does it actually perform against React?
+
+Everything above is about how it felt to write. That's the part I'd bet on
+being useful, but it isn't a measurement, so I built the comparison rather than
+asserting it.
+
+I rebuilt the Drawing screen four times — Svelte 5, naive React 19 (one
+`useState` at the top, props down, no memo), tuned React 19
+(`useSyncExternalStore` per leaf, everything memoised), and a no-framework
+control that updates the DOM by hand. Identical markup, identical CSS,
+identical canvas code, all production builds. Then a scripted 60 Hz workload:
+the clock updating every frame, eight stroke points pushed into the canvas
+every 50 ms, a guess every 900 ms, a leaderboard reorder every 3 s. Measured in
+real Chromium, median of three 5-second runs.
+
+### Bundle: the difference is large and real
+
+| Build | JS, gzipped |
+| --- | --- |
+| No framework (control) | 2.0 kB |
+| **Svelte 5** | **18.9 kB** |
+| React 19, naive | 62.6 kB |
+| React 19, tuned | 62.8 kB |
+
+The framework floor — a single component rendering `<div>1</div>` — is
+**13.9 kB for Svelte and 60.9 kB for React**. React costs about 47 kB gzipped
+before you write a line of your own.
+
+Worth noting the other direction, because it's the honest counterpoint: in the
+identical app, Svelte's *own* code grew by 4.9 kB while React's grew by 1.7 kB.
+Svelte compiles each component to instructions, so per-component output is
+larger; React ships one interpreter and reuses it. There is a crossover point
+where that catches up. For an eight-screen party game it is nowhere near.
+
+### Frame pacing: no difference at all at this app's size
+
+At 8 and at 100 clock-reading components, **all four variants hold 60 fps —
+including with the CPU throttled 4×.** Median frame time is 16.7 ms in every
+cell of the matrix. At 100 components under 4× throttling, dropped frames were
+4.5% (Svelte), 6.4% (naive React), 7.6% (tuned React) and 8.7% (no framework) —
+Svelte nominally ahead, but that ordering puts hand-written DOM code last, which
+is a good sign the spread is noise rather than signal.
+
+### The control is the interesting result
+
+Pushed to 400 components at 4× throttle, everything falls over together:
+
+| Variant | fps | frames > 34 ms |
+| --- | --- | --- |
+| No framework | 22.8 | 62.3% |
+| Svelte | 23.8 | 47.9% |
+| React, tuned | 22.2 | 64.8% |
+| React, naive | 21.4 | 70.1% |
+
+**The hand-written control collapses too.** At that point the cost is 400 DOM
+text updates plus canvas paint per frame, and no reactivity system is going to
+save you from it. Svelte degrades a little more gracefully — median frame 33 ms
+against 50 ms for the others — but nobody clears 24 fps. That is a workload
+problem, not a framework problem.
+
+### What I take from it
+
+The runtime answer is the one I didn't expect to have to admit: **for this app,
+framework choice does not measurably affect frame rate.** And that's precisely
+because of the architecture — the hot path never enters the reactive graph.
+`paint.ts` is imperative and `Canvas.svelte` subscribes to two scalars, so on
+the one axis that would actually stress a framework, all four variants are
+running the same code. Deciding early that strokes are not state turned out to
+matter more than which framework wrapped them.
+
+Where Svelte genuinely wins is **load**. Roughly 44 kB less JavaScript, and
+~15–25 ms sooner to a painted UI on a 4×-throttled CPU (unthrottled, Svelte
+mounts in ~50 ms, matching the no-framework floor; React takes ~63–65 ms). For
+a game people open once on a phone, on bar Wi-Fi, from a link someone just
+shared, the transfer time dominates anyway — which is the same reasoning that
+picked Svelte in the first place, now with a number attached.
+
+One result that goes the other way: Svelte used **more memory** — 3.9 MB heap
+against React's 3.1 MB at eight components. Per-component reactive graphs are
+not free.
+
+**Caveats, because they matter.** This is headless Chromium in a Linux
+container, not a phone; CPU throttling approximates a slow device but not its
+GPU or memory pressure. `requestAnimationFrame` is capped at 60 fps, so "all
+four hold 60" means "all four have enough headroom", not "equal headroom" — the
+dropped-frame column is the only view of what's left. And it is a faithful
+*model* of the Drawing screen, not the real app.
+
 ## What I'd flag if you're evaluating it
 
 **Genuinely good:**
@@ -261,8 +349,8 @@ components" a defensible position rather than an excuse.
 - No dependency arrays, no memoisation, no stale-closure class of bug.
 - Animation in the box, at zero bundle cost.
 - Small output. The entire client — eight screens, canvas, PWA, framework and
-  all app code — is **27.9 KB of gzipped JavaScript** and 3.7 KB of CSS. A
-  React + Motion equivalent starts above that before I write a line.
+  all app code — is **27.9 kB of gzipped JavaScript** and 3.7 kB of CSS. The
+  same app in React measures 3.3× the JavaScript; see the section above.
 
 **Real friction:**
 - `$state` on a class field is a compiler transform, so it works in
@@ -280,9 +368,11 @@ components" a defensible position rather than an excuse.
 
 **The honest summary:** for an app that is mostly one live server state fanned
 out to a dozen small animated components, with one performance-critical
-imperative island, Svelte 5 was the right call and it wasn't close. The runes
-model made the store trivial, and the compiler made "just mutate the array"
-a legitimate answer for the hot path.
+imperative island, Svelte 5 was the right call — though the benchmark reframes
+*why*. It wasn't the frame rate; at this size React would have held 60 fps too.
+It was the runes model making the store trivial, the compiler making "just
+mutate the array" a legitimate answer for the hot path, animation arriving in
+the box, and a third of the bytes on the wire.
 
 ---
 
