@@ -194,6 +194,14 @@ reducer: `src/game/` stays pure and receives the answer as a `grade` event.
 - `grade` is accepted during `reveal` too, since a slow verdict can land
   after the drawer has already picked. The reducer keeps `turn` and the
   recorded `turns[-1]` in step when that happens.
+- Guesses are judged on meaning, not wording or language. A room mixes
+  languages freely (see the language picker under "Client brief"), so the
+  prompt states that a guess need not be in the drawer's language and that
+  a correct translation is correct — while repeating the different-subject
+  rule across languages, so "accept any language" cannot decay into
+  "accept anything". Nobody's chosen language is sent to the model: it
+  reads language off the text, which keeps the picker out of the prompt
+  entirely.
 - Guess text is player-supplied, so it is treated strictly as data:
   guesses go out as a numbered list and the model replies with numbers,
   never with ids it could have read out of the text. Out-of-range numbers

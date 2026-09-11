@@ -78,6 +78,10 @@ Details and the motion vocabulary are in [DESIGN.md](DESIGN.md#client-look-and-f
 - Correctness is graded by an LLM, not by the drawer. It compares each
   guess against the drawer's own note of what they drew, so the drawer
   must write that note before they can finish drawing.
+- **Guesses are graded on meaning, not language.** Everyone picks their
+  own language, so one room routinely mixes them: a guess counts when it
+  names the same thing the drawer wrote down, whatever language either is
+  in. A different subject is still wrong, translated or not.
 - If grading fails or is not configured, the turn is recorded as ungraded
   and only the favourite scores. The game never blocks on it.
 - The drawer earns no points. Picking a favourite is the reward.
@@ -90,6 +94,7 @@ Details and the motion vocabulary are in [DESIGN.md](DESIGN.md#client-look-and-f
 | Prompts or free draw? | **Free draw.** The drawer must note what they drew — the grader needs it, and it is shown at the reveal. |
 | Who decides "correct"? | **An LLM** (Gemini), server-side. The drawer only picks a favourite, so their taste is the only thing they arbitrate. |
 | Several guesses correct? | **First submitted wins**, keeping the payout at 4 points a turn. |
+| Mixed languages in one room? | **Yes, per player.** Each player chooses their own interface language; the drawing is the shared medium and the grader accepts a correct guess in any language. Nothing is translated for anyone — players read each other's guesses as written. |
 | Drawer incentive? | **None.** |
 | Platform | **Mobile web / PWA.** No native apps, no TV view in v1. |
 | Backend | **Cloudflare Workers + Durable Objects.** One DO per room. See [DESIGN.md](DESIGN.md). |
