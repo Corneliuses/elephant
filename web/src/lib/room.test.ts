@@ -82,15 +82,22 @@ function stateMsg(over: Partial<ProjectedState> = {}): ServerMessage {
   }
 }
 
-/** Fresh module instance per test: the store is a singleton. */
+/**
+ * Fresh module instance per test: the store is a singleton.
+ *
+ * The language singleton has to come out of the same reset graph, or the
+ * store would be reading a different copy of it than the test is setting.
+ */
 async function freshRoom() {
   vi.resetModules()
+  lang = (await import('./i18n.svelte')).t
   const mod = await import('./room.svelte')
   return mod.room
 }
 
 type Room = Awaited<ReturnType<typeof freshRoom>>
 let room: Room
+let lang: (typeof import('./i18n.svelte'))['t']
 
 beforeEach(async () => {
   FakeWS.instances = []
@@ -209,9 +216,30 @@ describe('state', () => {
     expect(room.ranked.map((p) => p.id)).toEqual(['p2', 'p1'])
   })
 
-  it('surfaces server errors', () => {
-    FakeWS.last.deliver({ type: 'error', message: 'only the organizer can start the game' })
-    expect(room.error).toMatch(/organizer/)
+  it('surfaces server errors in the player\'s language, not the server\'s', () => {
+    // The server's prose is English and stays that way in the logs; the code
+    // beside it is what the toast renders.
+    FakeWS.last.deliver({
+      type: 'error',
+      message: 'only the organizer can start the game',
+      code: 'not_organizer',
+    })
+    expect(room.error).toBe(lang.s.errGeneric)
+    expect(room.error).not.toMatch(/organizer/)
+
+    lang.set('fr')
+    FakeWS.last.deliver({ type: 'error', message: 'invalid guess', code: 'invalid_guess' })
+    expect(room.error).toBe('Écrivez une réponse.')
+  })
+
+  it('fills the minimum-player count from the state it already has', () => {
+    FakeWS.last.deliver(stateMsg())
+    FakeWS.last.deliver({
+      type: 'error',
+      message: 'need at least 3 ready, connected players',
+      code: 'need_more_players',
+    })
+    expect(room.error).toBe('Need 3 ready players.')
   })
 })
 

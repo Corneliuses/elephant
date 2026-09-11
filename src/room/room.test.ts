@@ -279,7 +279,31 @@ describe('join', () => {
     a.send({ type: 'join', name: '   ', avatar: 'x' })
     const e = await a.next('error')
     expect(e.message).toMatch(/name/)
+    // The code is what the client shows: a player reading the app in French
+    // must not be handed the English message beside it.
+    expect(e.code).toBe('invalid_name')
     expect(a.has('welcome')).toBe(false)
+  })
+
+  it('tags transport-level refusals too', async () => {
+    const code = await createRoom()
+    const a = await connect(code)
+    a.send({ type: 'set_ready', ready: true })
+    expect((await a.next('error')).code).toBe('bad_request')
+    await a.join('A')
+    a.sendRaw('{not json')
+    expect((await a.next('error')).code).toBe('bad_request')
+    a.send({ type: 'join', name: 'Again', avatar: 'x' })
+    expect((await a.next('error')).code).toBe('already_joined')
+  })
+
+  it('keeps a name typed in any script', async () => {
+    // Names go through the reducer untouched apart from NFC and trimming;
+    // nothing down here assumes Latin text.
+    const code = await createRoom()
+    const a = await connect(code)
+    const s = await a.join('小明')
+    expect(s.players[a.playerId!]!.name).toBe('小明')
   })
 
   it('broadcasts to everyone with per-viewer projection', async () => {

@@ -6,6 +6,7 @@
   import Timer from '../lib/Timer.svelte'
   import { room } from '../lib/room.svelte'
   import { accentOf } from '../lib/avatars'
+  import { t } from '../lib/i18n.svelte'
 
   const game = $derived(room.game!)
   const turn = $derived(game.turn!)
@@ -27,7 +28,7 @@
   <header>
     <div class="who">
       <span class="face" style="background: {accentOf(turn.drawerId)}">{drawer?.avatar}</span>
-      <strong>{room.isDrawer ? 'Your pick' : `${drawer?.name} is choosing`}</strong>
+      <strong>{room.isDrawer ? t.s.yourPick : t.s.isChoosing(drawer?.name ?? '')}</strong>
     </div>
     {#if game.timerEndsAt}
       <Timer endsAt={game.timerEndsAt} total={game.config.judgingMs} />
@@ -41,19 +42,19 @@
 
   {#if room.isDrawer}
     <div class="prompt" in:fly={{ y: -10, duration: 220 }}>
-      <h2>{sent ? 'Nice.' : 'Which one is your favourite?'}</h2>
+      <h2>{sent ? t.s.nice : t.s.whichFavourite}</h2>
       {#if !sent}
         <p class="hint">
           {#if turn.grading === 'pending'}
-            Checking who got it right…
+            {t.s.checkingCorrect}
           {:else}
-            Who got it right is already settled.
+            {t.s.correctSettled}
           {/if}
         </p>
       {/if}
     </div>
   {:else}
-    <p class="waiting">Sit tight…</p>
+    <p class="waiting">{t.s.sitTight}</p>
   {/if}
 
   <div class="list">

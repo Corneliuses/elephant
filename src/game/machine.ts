@@ -9,6 +9,7 @@ import { DEFAULT_CONFIG } from './config'
 import { shuffle } from './random'
 import type {
   ApplyResult,
+  ErrorCode,
   GameConfig,
   GameEvent,
   GameState,
@@ -52,7 +53,7 @@ const LIVE_PHASES: readonly Phase[] = ['drawing', 'judging', 'reveal']
 
 export function apply(state: GameState, event: GameEvent): ApplyResult {
   if (state.phase === 'ended' && !CONNECTION_EVENTS.has(event.type)) {
-    return fail(state, 'game has ended')
+    return fail(state, 'game_ended', 'game has ended')
   }
 
   switch (event.type) {
@@ -94,18 +95,69 @@ type Ev<T extends GameEvent['type']> = Extract<GameEvent, { type: T }>
 function ok(state: GameState): ApplyResult {
   return { state }
 }
-function fail(state: GameState, error: string): ApplyResult {
-  return { state, error }
+/**
+ * Reject an event. `code` is the stable tag the client localises; `error` is
+ * English prose for logs and tests, and the two are kept side by side so
+ * rewording a message cannot quietly change what the client shows.
+ */
+function fail(state: GameState, code: ErrorCode, error: string): ApplyResult {
+  return { state, error, code }
+}
+
+// ---------------------------------------------------------------------------
+// Player text
+// ---------------------------------------------------------------------------
+
+/**
+ * Characters that are invisible and have no business in a name or a guess:
+ * bidi controls, which reorder the text after them on *other* players'
+ * screens, and zero-width blanks, which make a name look like nothing at all.
+ *
+ * The two joiners are deliberately not here. U+200D is what holds a
+ * multi-person emoji together — 👨‍👩‍👧 is five code points joined by it, and
+ * stripping them would turn one family into three people — and U+200C is
+ * load-bearing in scripts nobody here translates but a player may still write
+ * their own name in.
+ */
+const INVISIBLE = /[­؜᠎​‎‏‪-‮⁠-⁤⁦-⁩﻿]/gu
+
+/**
+ * Tidy a string a player typed, ready to store and compare.
+ *
+ * NFC matters once names and guesses are not all ASCII: a French keyboard may
+ * send "é" as a single code point or as "e" plus a combining acute, which look
+ * identical, compare unequal, and cost a different amount of the length
+ * budget. Composing on the way in means one form is ever stored.
+ *
+ * Anything that would show as blank comes back empty, so the callers' existing
+ * "not empty" checks reject it rather than seating a player nobody can see.
+ */
+function clean(text: string): string {
+  const stripped = text.replace(INVISIBLE, '').normalize('NFC').trim()
+  // The joiners survived the strip because emoji need them, but a string of
+  // nothing else is still a blank chip on everybody's screen.
+  return /[^‌‍]/u.test(stripped) ? stripped : ''
+}
+
+/** Length in code points, so an emoji costs 1 rather than 2. */
+function len(text: string): number {
+  return [...text].length
+}
+
+/** Truncate by code point: slicing UTF-16 can cut a surrogate pair in half. */
+function clip(text: string, max: number): string {
+  const chars = [...text]
+  return chars.length <= max ? text : chars.slice(0, max).join('')
 }
 
 // --- Lobby -----------------------------------------------------------------
 
 function join(state: GameState, ev: Ev<'join'>): ApplyResult {
-  if (state.players[ev.playerId]) return fail(state, 'player already joined')
-  const name = ev.name.trim()
-  if (name.length === 0 || name.length > state.config.nameMaxLen) return fail(state, 'invalid name')
-  const avatar = ev.avatar.trim()
-  if (avatar.length === 0) return fail(state, 'invalid avatar')
+  if (state.players[ev.playerId]) return fail(state, 'already_joined', 'player already joined')
+  const name = clean(ev.name)
+  if (len(name) === 0 || len(name) > state.config.nameMaxLen) return fail(state, 'invalid_name', 'invalid name')
+  const avatar = clean(ev.avatar)
+  if (avatar.length === 0) return fail(state, 'invalid_avatar', 'invalid avatar')
 
   const player: Player = {
     id: ev.playerId,
@@ -125,12 +177,12 @@ function join(state: GameState, ev: Ev<'join'>): ApplyResult {
 
 function setReady(state: GameState, ev: Ev<'set_ready'>): ApplyResult {
   const player = state.players[ev.playerId]
-  if (!player) return fail(state, 'unknown player')
+  if (!player) return fail(state, 'unknown_player', 'unknown player')
 
   if (state.phase === 'lobby') {
     return ok(setPlayer(state, player.id, { ready: ev.ready }))
   }
-  if (!ev.ready) return fail(state, 'can only un-ready in the lobby')
+  if (!ev.ready) return fail(state, 'unready_outside_lobby', 'can only un-ready in the lobby')
 
   let next = setPlayer(state, player.id, { ready: true })
   if (LIVE_PHASES.includes(state.phase) && !state.drawOrder.includes(player.id)) {
@@ -140,11 +192,11 @@ function setReady(state: GameState, ev: Ev<'set_ready'>): ApplyResult {
 }
 
 function startGame(state: GameState, ev: Ev<'start_game'>): ApplyResult {
-  if (state.phase !== 'lobby') return fail(state, 'can only start from the lobby')
-  if (ev.playerId !== state.organizerId) return fail(state, 'only the organizer can start the game')
+  if (state.phase !== 'lobby') return fail(state, 'not_in_lobby', 'can only start from the lobby')
+  if (ev.playerId !== state.organizerId) return fail(state, 'not_organizer', 'only the organizer can start the game')
   const eligible = eligiblePlayers(state)
   if (eligible.length < state.config.minPlayers) {
-    return fail(state, `need at least ${state.config.minPlayers} ready, connected players`)
+    return fail(state, 'need_more_players', `need at least ${state.config.minPlayers} ready, connected players`)
   }
   return ok(startRound(state, shuffle(eligible, ev.seed), 1, ev.now))
 }
@@ -152,20 +204,22 @@ function startGame(state: GameState, ev: Ev<'start_game'>): ApplyResult {
 // --- Drawing ---------------------------------------------------------------
 
 function setIntent(state: GameState, ev: Ev<'set_intent'>): ApplyResult {
-  if (state.phase !== 'drawing' || !state.turn) return fail(state, 'not in drawing phase')
-  if (ev.playerId !== state.turn.drawerId) return fail(state, 'only the drawer can set intent')
-  const text = ev.text.trim().slice(0, state.config.guessMaxLen)
+  if (state.phase !== 'drawing' || !state.turn) return fail(state, 'not_drawing', 'not in drawing phase')
+  if (ev.playerId !== state.turn.drawerId) return fail(state, 'not_drawer', 'only the drawer can set intent')
+  // Silently clipped rather than rejected: this arrives from a debounced
+  // keystroke, so there is no tap to refuse.
+  const text = clip(clean(ev.text), state.config.guessMaxLen)
   return ok({ ...state, turn: { ...state.turn, intent: text.length > 0 ? text : null } })
 }
 
 function submitGuess(state: GameState, ev: Ev<'submit_guess'>): ApplyResult {
-  if (state.phase !== 'drawing' || !state.turn) return fail(state, 'not in drawing phase')
+  if (state.phase !== 'drawing' || !state.turn) return fail(state, 'not_drawing', 'not in drawing phase')
   const player = state.players[ev.playerId]
-  if (!player) return fail(state, 'unknown player')
-  if (ev.playerId === state.turn.drawerId) return fail(state, 'the drawer cannot guess')
-  if (!player.ready) return fail(state, 'player is not ready')
-  const text = ev.text.trim()
-  if (text.length === 0 || text.length > state.config.guessMaxLen) return fail(state, 'invalid guess')
+  if (!player) return fail(state, 'unknown_player', 'unknown player')
+  if (ev.playerId === state.turn.drawerId) return fail(state, 'drawer_cannot_guess', 'the drawer cannot guess')
+  if (!player.ready) return fail(state, 'not_ready', 'player is not ready')
+  const text = clean(ev.text)
+  if (len(text) === 0 || len(text) > state.config.guessMaxLen) return fail(state, 'invalid_guess', 'invalid guess')
 
   const existing = state.turn.guesses.find((g) => g.playerId === player.id)
   const others = state.turn.guesses.filter((g) => g.playerId !== player.id)
@@ -181,11 +235,11 @@ function submitGuess(state: GameState, ev: Ev<'submit_guess'>): ApplyResult {
 }
 
 function endDrawing(state: GameState, ev: Ev<'end_drawing'>): ApplyResult {
-  if (state.phase !== 'drawing' || !state.turn) return fail(state, 'not in drawing phase')
-  if (ev.playerId !== state.turn.drawerId) return fail(state, 'only the drawer can end drawing')
+  if (state.phase !== 'drawing' || !state.turn) return fail(state, 'not_drawing', 'not in drawing phase')
+  if (ev.playerId !== state.turn.drawerId) return fail(state, 'not_drawer', 'only the drawer can end drawing')
   // The grader compares guesses against this, so there is nothing to grade
   // without it. The client keeps "Done" disabled until it is set.
-  if (state.turn.intent === null) return fail(state, 'say what you are drawing first')
+  if (state.turn.intent === null) return fail(state, 'intent_required', 'say what you are drawing first')
   return ok(finishDrawing(state, ev.now))
 }
 
@@ -193,12 +247,12 @@ function endDrawing(state: GameState, ev: Ev<'end_drawing'>): ApplyResult {
 
 /** The drawer's only call: which answer they liked most. */
 function judge(state: GameState, ev: Ev<'judge'>): ApplyResult {
-  if (state.phase !== 'judging' || !state.turn) return fail(state, 'not in judging phase')
+  if (state.phase !== 'judging' || !state.turn) return fail(state, 'not_judging', 'not in judging phase')
   const turn = state.turn
-  if (ev.playerId !== turn.drawerId) return fail(state, 'only the drawer can judge')
+  if (ev.playerId !== turn.drawerId) return fail(state, 'not_drawer', 'only the drawer can judge')
 
   const favorite = turn.guesses.find((g) => g.id === ev.favoriteGuessId)
-  if (!favorite) return fail(state, 'unknown guess id')
+  if (!favorite) return fail(state, 'unknown_guess', 'unknown guess id')
 
   // The same guess may be both correct and the favorite, and then earns both.
   const next = addScore(state, favorite.playerId, state.config.favoritePoints)
@@ -212,12 +266,12 @@ function judge(state: GameState, ev: Ev<'judge'>): ApplyResult {
  */
 function grade(state: GameState, ev: Ev<'grade'>): ApplyResult {
   const live = state.turn
-  if (!live) return fail(state, 'no turn to grade')
-  if (state.phase !== 'judging' && state.phase !== 'reveal') return fail(state, 'not gradeable now')
-  if (live.grading !== 'pending') return fail(state, 'already graded')
+  if (!live) return fail(state, 'nothing_to_grade', 'no turn to grade')
+  if (state.phase !== 'judging' && state.phase !== 'reveal') return fail(state, 'not_gradeable', 'not gradeable now')
+  if (live.grading !== 'pending') return fail(state, 'already_graded', 'already graded')
 
   const correct = ev.correctGuessId === null ? null : live.guesses.find((g) => g.id === ev.correctGuessId)
-  if (ev.correctGuessId !== null && !correct) return fail(state, 'unknown guess id')
+  if (ev.correctGuessId !== null && !correct) return fail(state, 'unknown_guess', 'unknown guess id')
 
   const turn: Turn = {
     ...live,
@@ -236,24 +290,24 @@ function grade(state: GameState, ev: Ev<'grade'>): ApplyResult {
 // --- Reveal / round end ----------------------------------------------------
 
 function advance(state: GameState, ev: Ev<'advance'>): ApplyResult {
-  if (state.phase !== 'reveal') return fail(state, 'not in reveal phase')
-  if (ev.playerId !== state.organizerId) return fail(state, 'only the organizer can advance')
+  if (state.phase !== 'reveal') return fail(state, 'not_reveal', 'not in reveal phase')
+  if (ev.playerId !== state.organizerId) return fail(state, 'not_organizer', 'only the organizer can advance')
   return ok(beginTurn(state, state.drawerIdx + 1, ev.now))
 }
 
 function nextRound(state: GameState, ev: Ev<'next_round'>): ApplyResult {
-  if (state.phase !== 'round_end') return fail(state, 'not in round_end phase')
-  if (ev.playerId !== state.organizerId) return fail(state, 'only the organizer can start a round')
+  if (state.phase !== 'round_end') return fail(state, 'not_round_end', 'not in round_end phase')
+  if (ev.playerId !== state.organizerId) return fail(state, 'not_organizer', 'only the organizer can start a round')
   const eligible = eligiblePlayers(state)
   if (eligible.length < state.config.minPlayers) {
-    return fail(state, `need at least ${state.config.minPlayers} ready, connected players`)
+    return fail(state, 'need_more_players', `need at least ${state.config.minPlayers} ready, connected players`)
   }
   return ok(startRound(state, shuffle(eligible, ev.seed), state.round + 1, ev.now))
 }
 
 function endGame(state: GameState, ev: Ev<'end_game'>): ApplyResult {
-  if (state.phase !== 'round_end') return fail(state, 'not in round_end phase')
-  if (ev.playerId !== state.organizerId) return fail(state, 'only the organizer can end the game')
+  if (state.phase !== 'round_end') return fail(state, 'not_round_end', 'not in round_end phase')
+  if (ev.playerId !== state.organizerId) return fail(state, 'not_organizer', 'only the organizer can end the game')
   return ok({ ...state, phase: 'ended', turn: null, timerEndsAt: null, graceEndsAt: null })
 }
 
@@ -261,7 +315,7 @@ function endGame(state: GameState, ev: Ev<'end_game'>): ApplyResult {
 
 function disconnect(state: GameState, ev: Ev<'disconnect'>): ApplyResult {
   const player = state.players[ev.playerId]
-  if (!player) return fail(state, 'unknown player')
+  if (!player) return fail(state, 'unknown_player', 'unknown player')
 
   let next = setPlayer(state, player.id, { connected: false })
   if (state.organizerId === player.id) next = promoteOrganizer(next)
@@ -273,7 +327,7 @@ function disconnect(state: GameState, ev: Ev<'disconnect'>): ApplyResult {
 
 function reconnect(state: GameState, ev: Ev<'reconnect'>): ApplyResult {
   const player = state.players[ev.playerId]
-  if (!player) return fail(state, 'unknown player')
+  if (!player) return fail(state, 'unknown_player', 'unknown player')
 
   let next = setPlayer(state, player.id, { connected: true })
   if (state.turn?.drawerId === player.id && state.graceEndsAt !== null) {
@@ -284,7 +338,7 @@ function reconnect(state: GameState, ev: Ev<'reconnect'>): ApplyResult {
 
 function leave(state: GameState, ev: Ev<'leave'>): ApplyResult {
   const player = state.players[ev.playerId]
-  if (!player) return fail(state, 'unknown player')
+  if (!player) return fail(state, 'unknown_player', 'unknown player')
 
   const { [player.id]: _removed, ...players } = state.players
   let next: GameState = { ...state, players }

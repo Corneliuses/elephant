@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Player } from '$shared/game/types'
   import { accentOf } from './avatars'
+  import { t } from './i18n.svelte'
 
   let { player, showScore = false, crown = false }: {
     player: Player
@@ -12,7 +13,7 @@
 <div class="chip" class:off={!player.connected} style="--accent: {accentOf(player.id)}">
   <span class="face">{player.avatar}</span>
   <span class="name">{player.name}</span>
-  {#if crown}<span class="crown" title="Organizer">👑</span>{/if}
+  {#if crown}<span class="crown" title={t.s.organizer}>👑</span>{/if}
   {#if showScore}<span class="score">{player.score}</span>{/if}
   {#if player.ready && !showScore}<span class="tick">✓</span>{/if}
 </div>

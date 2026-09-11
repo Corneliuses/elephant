@@ -5,6 +5,7 @@
   import TurnCard from '../lib/TurnCard.svelte'
   import { room } from '../lib/room.svelte'
   import { router } from '../lib/router.svelte'
+  import { t } from '../lib/i18n.svelte'
 
   const game = $derived(room.game!)
   const winner = $derived(room.ranked[0])
@@ -17,14 +18,14 @@
       <Burst count={30} />
       <span class="face">{winner?.avatar ?? '🐘'}</span>
     </div>
-    <h1>{winner ? `${winner.name} wins` : 'Game over'}</h1>
-    <p class="sub">{played} drawing{played === 1 ? '' : 's'} over {game.round} round{game.round === 1 ? '' : 's'}</p>
+    <h1>{winner ? t.s.wins(winner.name) : t.s.gameOver}</h1>
+    <p class="sub">{t.s.summary(played, game.round)}</p>
   </header>
 
   <Leaderboard players={room.ranked} />
 
   {#if game.turns.length}
-    <h2 class="gallery-title">The gallery</h2>
+    <h2 class="gallery-title">{t.s.theGallery}</h2>
     <div class="gallery">
       {#each game.turns as turn, i (i)}
         <div in:fly={{ y: 24, duration: 300, delay: i * 60 }}>
@@ -35,7 +36,7 @@
   {/if}
 
   <button class="btn primary wide" onclick={() => { room.leave(); router.go('/') }}>
-    New game
+    {t.s.newGame}
   </button>
 </div>
 

@@ -37,7 +37,15 @@
   /* Overshoot. This is the "crunch". */
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  --font: ui-rounded, "SF Pro Rounded", "Nunito", system-ui, -apple-system, sans-serif;
+  /*
+   * Latin faces first, then faces that actually carry Han: none of the
+   * rounded ones do, so Chinese text falls through per character to whatever
+   * comes next. Naming the system CJK faces means it lands on PingFang or
+   * Noto rather than on a default with no personality.
+   */
+  --font:
+    ui-rounded, "SF Pro Rounded", "Nunito", system-ui, -apple-system,
+    "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
 }
 
 /* Dark mode is a different bright, not a dimmed one. */

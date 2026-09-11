@@ -1,6 +1,7 @@
 <script lang="ts">
   import { room } from './lib/room.svelte'
   import { router } from './lib/router.svelte'
+  import { t } from './lib/i18n.svelte'
   import Home from './screens/Home.svelte'
   import Join from './screens/Join.svelte'
   import Lobby from './screens/Lobby.svelte'
@@ -32,16 +33,16 @@
   <Home />
 {:else if room.status === 'gone'}
   <div class="screen center">
-    <h1>This room is gone</h1>
-    <p>Rooms disappear once everyone has left.</p>
-    <button class="btn primary" onclick={() => router.go('/')}>Start a new one</button>
+    <h1>{t.s.roomGone}</h1>
+    <p>{t.s.roomGoneBody}</p>
+    <button class="btn primary" onclick={() => router.go('/')}>{t.s.startNewOne}</button>
   </div>
 {:else if room.needsJoin}
   <Join />
 {:else if !room.game}
   <div class="screen center">
     <div class="pulse">🐘</div>
-    <p>{room.status === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}</p>
+    <p>{room.status === 'reconnecting' ? t.s.reconnecting : t.s.connecting}</p>
   </div>
 {:else if room.game.phase === 'lobby'}
   <Lobby />

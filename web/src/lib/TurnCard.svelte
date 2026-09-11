@@ -3,6 +3,7 @@
   import type { Stroke } from '$shared/room/protocol'
   import Canvas from './Canvas.svelte'
   import { room } from './room.svelte'
+  import { t } from './i18n.svelte'
 
   let { turn, index }: { turn: ProjectedTurn; index: number } = $props()
 
@@ -34,7 +35,7 @@
 
 <figure class="card turn">
   {#if turn.skipped}
-    <div class="skipped">Skipped</div>
+    <div class="skipped">{t.s.skipped}</div>
   {:else}
     <Canvas {strokes} epoch={index} />
   {/if}

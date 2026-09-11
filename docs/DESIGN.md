@@ -194,6 +194,14 @@ reducer: `src/game/` stays pure and receives the answer as a `grade` event.
 - `grade` is accepted during `reveal` too, since a slow verdict can land
   after the drawer has already picked. The reducer keeps `turn` and the
   recorded `turns[-1]` in step when that happens.
+- Guesses are judged on meaning, not wording or language. A room mixes
+  languages freely (see the language picker under "Client brief"), so the
+  prompt states that a guess need not be in the drawer's language and that
+  a correct translation is correct — while repeating the different-subject
+  rule across languages, so "accept any language" cannot decay into
+  "accept anything". Nobody's chosen language is sent to the model: it
+  reads language off the text, which keeps the picker out of the prompt
+  entirely.
 - Guess text is player-supplied, so it is treated strictly as data:
   guesses go out as a numbered list and the model replies with numbers,
   never with ids it could have read out of the text. Out-of-range numbers
@@ -314,8 +322,12 @@ stamps both; anything the client sends for those is ignored), plus:
   full buffer to replace whatever the client has. A reset is sent on
   join/reconnect and (empty) when a new turn starts, **before** the
   `state` that announces the turn, so the canvas clears first.
-- `error {message}` — from a rejected event or malformed message. The
-  socket stays open.
+- `error {message, code}` — from a rejected event or malformed message.
+  The socket stays open. `message` is English prose, for logs and tests;
+  `code` is a stable tag (`WireErrorCode`: every `ErrorCode` the reducer
+  can return, plus `unauthorized` and `bad_request`) and is what the
+  client actually shows, worded in the player's own language. Rewording a
+  message therefore cannot change what a player reads.
 
 Messages over 64 KB or that are not a JSON object with a string `type`
 are rejected. Close codes: 4000 left, 4001 unauthorized, 4002 replaced
@@ -401,7 +413,7 @@ wake-up); the repaint invariant is checked against a recording fake 2D
 context. That logic lives in `lib/paint.ts` rather than in
 `Canvas.svelte` precisely so it can be tested without a browser.
 
-`scripts/e2e.mjs` is the layer none of the above reaches: six scenarios in
+`scripts/e2e.mjs` is the layer none of the above reaches: eight scenarios in
 real browsers against `wrangler dev`, three browser contexts standing in
 for three phones. It has caught bugs that unit tests and typechecking did
 not — run it after changing anything in `web/` or the wire protocol.
@@ -436,6 +448,51 @@ none.
   play; the point is the home-screen install and full-screen chrome.
 - **Shared types:** the client imports `GameEvent` / `ProjectedState`
   from `src/game/` so the wire protocol has one definition.
+- **Language:** per player, chosen in the client and never sent anywhere
+  (see *Languages* below).
+
+## Languages
+
+English, French, Spanish and Chinese, **mixed freely inside one room**.
+Each player picks their own; nobody else's screen changes.
+
+- `web/src/lib/i18n.svelte.ts` holds a `Strings` interface and one
+  dictionary per language, so a missing phrase is a type error rather
+  than a gap that shows up in front of players. Phrases that interpolate
+  are functions, which is also how plurals are handled — French treats 0
+  as singular and Chinese has no plural at all, so `Intl.PluralRules`
+  buys nothing over four small functions.
+- The choice lives in `localStorage` and defaults to `navigator.languages`
+  on the primary subtag, so `fr-CA` gets French; `zh-TW` gets Simplified,
+  which is imperfect and beats English. It is offered where a player is
+  standing still — home, join, lobby — never over a live drawing.
+- `<html lang>` follows the choice, as `zh-Hans` for Chinese: the script
+  subtag is what picks the right Han glyphs. The font stack names the
+  system CJK faces after the rounded Latin ones, which do not carry Han.
+- **Nothing players type is translated or normalised into one language.**
+  Names, guesses and the drawer's note travel and display exactly as
+  typed — reading a guess you only half understand is part of the game.
+  The reducer composes them to NFC and measures lengths in code points,
+  so a decomposed "é" costs one character rather than two and a clipped
+  note can never end in half a surrogate pair. It also drops characters
+  that are invisible but not joiners — bidi overrides, which reorder text
+  on *other* players' screens, and zero-width blanks, which would seat a
+  player as a chip nobody can identify — and treats what is left as empty
+  if nothing would show. U+200C and U+200D survive: 👨‍👩‍👧 is five code
+  points held together by joiners.
+- Text fields guard against IME composition: the Enter that picks a
+  Chinese candidate is the same Enter that submits the form around it.
+  The guard is on the **keystroke** (`isComposing`, plus a
+  `compositionstart`/`end` flag), never on the submit — a submit is either
+  that Enter once the composition closed or a tap on the button, which
+  blurred the field and committed it, so refusing one would lose a guess
+  silently. Anything a tap has to flush is read from the element's
+  `.value` rather than its binding. The room-code field strips characters
+  outside `A-Z`, and re-derives the code on submit, since a submit can
+  land while a composition is still open and the field untidied.
+  `scripts/e2e.mjs` drives a real composition over CDP to cover it.
+- Correctness across languages is the grader's problem, and is handled in
+  the prompt — see *Grading*.
 
 ## Client: look and feel
 
