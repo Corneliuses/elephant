@@ -133,7 +133,7 @@ export class RoomDO extends DurableObject<Env> {
   private async handleReconnect(ws: WebSocket, playerId: PlayerId, secret: string): Promise<void> {
     const expected = await this.ctx.storage.get<string>(keySecret(playerId))
     if (!this.game || !expected || expected !== secret || !this.game.players[playerId]) {
-      send(ws, { type: 'error', message: 'unauthorized' })
+      send(ws, { type: 'error', message: 'unauthorized', code: 'unauthorized' })
       ws.close(CLOSE_UNAUTHORIZED, 'unauthorized')
       return
     }
@@ -161,25 +161,25 @@ export class RoomDO extends DurableObject<Env> {
       return
     }
     if (typeof raw !== 'string' || raw.length > MAX_MESSAGE_BYTES) {
-      send(ws, { type: 'error', message: 'invalid message' })
+      send(ws, { type: 'error', message: 'invalid message', code: 'bad_request' })
       return
     }
     let msg: unknown
     try {
       msg = JSON.parse(raw)
     } catch {
-      send(ws, { type: 'error', message: 'invalid message: not JSON' })
+      send(ws, { type: 'error', message: 'invalid message: not JSON', code: 'bad_request' })
       return
     }
     if (!isRecord(msg) || typeof msg['type'] !== 'string') {
-      send(ws, { type: 'error', message: 'invalid message' })
+      send(ws, { type: 'error', message: 'invalid message', code: 'bad_request' })
       return
     }
 
     const { playerId } = getAttachment(ws)
     if (msg['type'] === 'join') return this.handleJoin(ws, playerId, msg)
     if (playerId === null) {
-      send(ws, { type: 'error', message: 'join first' })
+      send(ws, { type: 'error', message: 'join first', code: 'bad_request' })
       return
     }
     if (msg['type'] === 'stroke') return this.handleStroke(ws, playerId, msg)
@@ -187,12 +187,12 @@ export class RoomDO extends DurableObject<Env> {
 
     const event = toGameEvent(msg, playerId, Date.now())
     if (typeof event === 'string') {
-      send(ws, { type: 'error', message: event })
+      send(ws, { type: 'error', message: event, code: 'bad_request' })
       return
     }
     const r = apply(this.game, event)
     if (r.error) {
-      send(ws, { type: 'error', message: r.error })
+      send(ws, { type: 'error', message: r.error, code: r.code ?? 'bad_request' })
       return
     }
     await this.commit(r.state)
@@ -214,7 +214,7 @@ export class RoomDO extends DurableObject<Env> {
 
   private async handleJoin(ws: WebSocket, existing: PlayerId | null, msg: Record<string, unknown>): Promise<void> {
     if (existing !== null) {
-      send(ws, { type: 'error', message: 'already joined' })
+      send(ws, { type: 'error', message: 'already joined', code: 'already_joined' })
       return
     }
     const name = typeof msg['name'] === 'string' ? msg['name'] : ''
@@ -222,7 +222,7 @@ export class RoomDO extends DurableObject<Env> {
     const playerId = crypto.randomUUID().slice(0, 8)
     const r = apply(this.game!, { type: 'join', now: Date.now(), playerId, name, avatar })
     if (r.error) {
-      send(ws, { type: 'error', message: r.error })
+      send(ws, { type: 'error', message: r.error, code: r.code ?? 'bad_request' })
       return
     }
     const secret = crypto.randomUUID()
@@ -237,7 +237,7 @@ export class RoomDO extends DurableObject<Env> {
   private async handleStroke(ws: WebSocket, playerId: PlayerId, msg: Record<string, unknown>): Promise<void> {
     const strokes = msg['strokes']
     if (!Array.isArray(strokes) || !strokes.every(isStroke)) {
-      send(ws, { type: 'error', message: 'invalid stroke batch' })
+      send(ws, { type: 'error', message: 'invalid stroke batch', code: 'bad_request' })
       return
     }
     const game = this.game!
@@ -256,7 +256,7 @@ export class RoomDO extends DurableObject<Env> {
   private async handleLeave(ws: WebSocket, playerId: PlayerId): Promise<void> {
     const r = apply(this.game!, { type: 'leave', now: Date.now(), playerId })
     if (r.error) {
-      send(ws, { type: 'error', message: r.error })
+      send(ws, { type: 'error', message: r.error, code: r.code ?? 'bad_request' })
       return
     }
     await this.ctx.storage.delete(keySecret(playerId))

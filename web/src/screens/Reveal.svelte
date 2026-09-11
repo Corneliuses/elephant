@@ -4,6 +4,7 @@
   import GuessBubble from '../lib/GuessBubble.svelte'
   import Leaderboard from '../lib/Leaderboard.svelte'
   import { room } from '../lib/room.svelte'
+  import { t } from '../lib/i18n.svelte'
 
   const game = $derived(room.game!)
   const turn = $derived(game.turn!)
@@ -42,7 +43,7 @@
     </div>
     <div class="by">
       <span class="face">{drawer?.avatar}</span>
-      <span class="cap">by {drawer?.name}</span>
+      <span class="cap">{t.s.by(drawer?.name ?? '')}</span>
     </div>
   </div>
 
@@ -60,20 +61,20 @@
   {#if showIntent}
     <p class="intent" in:scale={{ duration: 340, start: 0.8 }}>
       {#if turn.intent}
-        It was… <strong>{turn.intent}</strong>
+        {t.s.itWas} <strong>{turn.intent}</strong>
       {:else}
-        {drawer?.name} never said what it was.
+        {t.s.neverSaid(drawer?.name ?? '')}
       {/if}
     </p>
     <p class="verdict">
       {#if turn.grading === 'pending'}
-        Still checking the answers…
+        {t.s.stillChecking}
       {:else if turn.grading === 'unavailable'}
-        Answers could not be checked this turn.
+        {t.s.couldNotCheck}
       {:else if turn.correctGuessId}
-        ✓ marks the answer that got it.
+        {t.s.checkMarks}
       {:else}
-        Nobody got it right.
+        {t.s.nobodyRight}
       {/if}
     </p>
   {/if}
@@ -87,7 +88,7 @@
   <div class="spacer"></div>
 
   {#if room.isOrganizer}
-    <button class="btn primary wide" onclick={() => room.send({ type: 'advance' })}>Next</button>
+    <button class="btn primary wide" onclick={() => room.send({ type: 'advance' })}>{t.s.next}</button>
   {/if}
 </div>
 

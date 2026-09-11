@@ -1,5 +1,7 @@
 <script lang="ts">
   import { router } from '../lib/router.svelte'
+  import { t } from '../lib/i18n.svelte'
+  import LangPicker from '../lib/LangPicker.svelte'
 
   let creating = $state(false)
   let joinCode = $state('')
@@ -24,37 +26,59 @@
     const code = joinCode.trim().toUpperCase()
     if (code.length === 4) router.go(`/g/${code}`)
   }
+
+  /**
+   * Keep the field to the four letters a room code can be made of.
+   *
+   * A phone left in a Chinese or Japanese IME emits candidate text into this
+   * field, which would eat the 4-character budget with characters no code
+   * contains. Filtering waits for the composition to finish: editing the
+   * value mid-composition fights the IME and drops keystrokes.
+   */
+  let composing = $state(false)
+  function tidyCode() {
+    if (composing) return
+    joinCode = joinCode.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4)
+  }
 </script>
 
 <div class="screen home">
   <div class="hero">
     <div class="logo">🐘</div>
     <h1>Elephant</h1>
-    <p class="tag">Draw badly. Guess wildly. Reward your favourite.</p>
+    <p class="tag">{t.s.tagline}</p>
   </div>
 
   <div class="actions">
     <button class="btn primary wide" onclick={createRoom} disabled={creating}>
-      {creating ? 'Making a room…' : 'Start a game'}
+      {creating ? t.s.makingRoom : t.s.startAGame}
     </button>
 
     <form class="join" onsubmit={joinRoom}>
       <input
         class="field code"
         bind:value={joinCode}
-        placeholder="CODE"
+        placeholder={t.s.codePlaceholder}
         maxlength="4"
         autocapitalize="characters"
         autocomplete="off"
         spellcheck="false"
-        aria-label="Room code"
+        aria-label={t.s.roomCodeLabel}
+        oninput={tidyCode}
+        oncompositionstart={() => (composing = true)}
+        oncompositionend={() => {
+          composing = false
+          tidyCode()
+        }}
       />
-      <button class="btn ghost" disabled={joinCode.trim().length !== 4}>Join</button>
+      <button class="btn ghost" disabled={joinCode.trim().length !== 4}>{t.s.join}</button>
     </form>
 
     {#if failed}
-      <p class="err">Could not reach the server. Try again?</p>
+      <p class="err">{t.s.serverUnreachable}</p>
     {/if}
+
+    <div class="lang"><LangPicker /></div>
   </div>
 </div>
 
@@ -79,6 +103,7 @@
     text-transform: uppercase;
   }
   .err { color: var(--hot); font-weight: 800; margin: 0; }
+  .lang { display: grid; justify-items: center; margin-top: 0.4rem; }
   @keyframes sway {
     0%, 100% { transform: rotate(-6deg) translateY(0); }
     50% { transform: rotate(6deg) translateY(-8px); }

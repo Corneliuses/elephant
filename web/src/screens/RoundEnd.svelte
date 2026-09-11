@@ -2,6 +2,7 @@
   import { fly } from 'svelte/transition'
   import Leaderboard from '../lib/Leaderboard.svelte'
   import { room } from '../lib/room.svelte'
+  import { t } from '../lib/i18n.svelte'
 
   const game = $derived(room.game!)
   const leader = $derived(room.ranked[0])
@@ -10,14 +11,14 @@
 
 <div class="screen">
   <header in:fly={{ y: -14, duration: 300 }}>
-    <p class="kicker">Round {game.round} done</p>
+    <p class="kicker">{t.s.roundDone(game.round)}</p>
     {#if leader && leader.score > 0}
       <div class="winner">
         <span class="face">{leader.avatar}</span>
-        <h1>{leader.name} leads</h1>
+        <h1>{t.s.leads(leader.name)}</h1>
       </div>
     {:else}
-      <h1>Nobody scored</h1>
+      <h1>{t.s.nobodyScored}</h1>
     {/if}
   </header>
 
@@ -27,14 +28,14 @@
 
   {#if room.isOrganizer}
     <button class="btn primary wide" disabled={!enough} onclick={() => room.send({ type: 'next_round' })}>
-      Another round
+      {t.s.anotherRound}
     </button>
-    <button class="btn ghost wide" onclick={() => room.send({ type: 'end_game' })}>End the game</button>
+    <button class="btn ghost wide" onclick={() => room.send({ type: 'end_game' })}>{t.s.endTheGame}</button>
     {#if !enough}
-      <p class="note">Need {game.config.minPlayers} ready players for another round.</p>
+      <p class="note">{t.s.needReadyPlayers(game.config.minPlayers)}</p>
     {/if}
   {:else}
-    <p class="note">Waiting for the organizer…</p>
+    <p class="note">{t.s.waitingOrganizer}</p>
   {/if}
 </div>
 

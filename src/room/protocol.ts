@@ -4,7 +4,7 @@
  * The client never sends `playerId` or `now`: the DO stamps both from the
  * socket's identity and its own clock before applying a game event.
  */
-import type { GameConfig, GuessId, Phase, PlayerId, ProjectedState } from '../game/types'
+import type { ErrorCode, GameConfig, GuessId, Phase, PlayerId, ProjectedState } from '../game/types'
 
 /**
  * A drawing event. `x`, `y` and `width` are all normalised to [0, 1] as a
@@ -33,6 +33,14 @@ export type ClientMessage =
   | { type: 'leave' }
   | { type: 'stroke'; strokes: Stroke[] }
 
+/**
+ * Why a message was refused: every code the reducer can return, plus the two
+ * the transport raises before the reducer is reached. `bad_request` covers a
+ * malformed or out-of-order message — a client bug rather than something a
+ * player did, so the UI can say so once rather than translating each variant.
+ */
+export type WireErrorCode = ErrorCode | 'unauthorized' | 'bad_request'
+
 export type ServerMessage =
   /** Sent once after a successful `join`. Persist these to reconnect. */
   | { type: 'welcome'; playerId: PlayerId; secret: string }
@@ -44,7 +52,12 @@ export type ServerMessage =
   | { type: 'state'; state: ProjectedState; now: number }
   /** Stroke batch. `reset: true` means "replace what you have with this". */
   | { type: 'strokes'; strokes: Stroke[]; reset?: boolean }
-  | { type: 'error'; message: string }
+  /**
+   * A refused message. `message` is English prose, for logs and for anything
+   * that does not know the code; `code` is what the client renders, in
+   * whichever language its player picked.
+   */
+  | { type: 'error'; message: string; code: WireErrorCode }
 
 /** Room-level housekeeping, distinct from game rules. */
 export interface RoomOptions {

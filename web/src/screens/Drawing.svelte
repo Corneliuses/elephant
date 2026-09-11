@@ -5,6 +5,7 @@
   import Timer from '../lib/Timer.svelte'
   import { room } from '../lib/room.svelte'
   import { accentOf } from '../lib/avatars'
+  import { t } from '../lib/i18n.svelte'
 
   const game = $derived(room.game!)
   const turn = $derived(game.turn!)
@@ -49,8 +50,23 @@
     onstrokes([{ t: 'clear' }])
   }
 
+  /*
+   * Text input has to survive an IME. Typing Chinese, Japanese or Korean
+   * means composing several keystrokes into each character, and the Enter
+   * that picks a candidate is the same Enter that would submit this form —
+   * which would send half-finished pinyin as somebody's guess. Watching the
+   * composition events (and `isComposing` on the keystroke itself, which is
+   * true for the commit press) keeps the two apart.
+   */
+  let composing = $state(false)
+
+  function onGuessKey(e: KeyboardEvent) {
+    if (e.key === 'Enter' && (e.isComposing || composing)) e.preventDefault()
+  }
+
   function submitGuess(e: SubmitEvent) {
     e.preventDefault()
+    if (composing) return
     const text = guess.trim()
     if (!text) return
     room.send({ type: 'submit_guess', text })
@@ -58,6 +74,7 @@
     guess = ''
   }
 
+  let intentEl = $state<HTMLInputElement | null>(null)
   let intentTimer: ReturnType<typeof setTimeout> | null = null
   function onIntent() {
     if (intentTimer) clearTimeout(intentTimer)
@@ -74,7 +91,10 @@
       clearTimeout(intentTimer)
       intentTimer = null
     }
-    room.send({ type: 'set_intent', text: intent })
+    // Read the field itself rather than the binding: tapping the button
+    // blurs the input, which commits any open IME composition, and the
+    // element has the finished characters before this handler runs.
+    room.send({ type: 'set_intent', text: intentEl?.value ?? intent })
     room.send({ type: 'end_drawing' })
   }
 
@@ -89,15 +109,15 @@
     <div class="who">
       <span class="face" style="background: {accentOf(turn.drawerId)}">{drawer?.avatar}</span>
       <div>
-        <strong>{room.isDrawer ? 'You are drawing' : `${drawer?.name} is drawing`}</strong>
+        <strong>{room.isDrawer ? t.s.youAreDrawing : t.s.isDrawing(drawer?.name ?? '')}</strong>
         <p class="sub">
           {#if turn.guesses.length > 0}
             <!-- The drawer wants this too: it is how they decide when to stop. -->
-            {turn.guesses.length} guess{turn.guesses.length === 1 ? '' : 'es'} in
+            {t.s.guessesIn(turn.guesses.length)}
           {:else if room.isDrawer}
-            Draw anything. They guess.
+            {t.s.drawAnything}
           {:else}
-            No guesses yet
+            {t.s.noGuessesYet}
           {/if}
         </p>
       </div>
@@ -124,29 +144,30 @@
             class="swatch"
             class:on={c === color}
             style="background: {c}"
-            aria-label="Colour {c}"
+            aria-label={t.s.colour(c)}
             onclick={() => (color = c)}
           ></button>
         {/each}
       </div>
       <div class="sizes">
         {#each WIDTHS as w (w)}
-          <button class="size" class:on={w === width} aria-label="Brush size" onclick={() => (width = w)}>
+          <button class="size" class:on={w === width} aria-label={t.s.brushSize} onclick={() => (width = w)}>
             <span style="width: {6 + w * 260}px; height: {6 + w * 260}px"></span>
           </button>
         {/each}
-        <button class="size wipe" onclick={clearCanvas} aria-label="Clear the canvas">✕</button>
+        <button class="size wipe" onclick={clearCanvas} aria-label={t.s.clearCanvas}>✕</button>
       </div>
     </div>
 
     <input
       class="field"
       class:needed={!canFinish}
+      bind:this={intentEl}
       bind:value={intent}
       oninput={onIntent}
-      placeholder="What is it? (needed, and only you see it)"
+      placeholder={t.s.intentPlaceholder}
       maxlength="100"
-      aria-label="What you are drawing"
+      aria-label={t.s.intentLabel}
     />
 
     <button
@@ -154,23 +175,26 @@
       disabled={!canFinish}
       onclick={finish}
     >
-      {canFinish ? 'Done drawing' : 'Say what it is first'}
+      {canFinish ? t.s.doneDrawing : t.s.sayWhatFirst}
     </button>
   {:else}
     <form class="guessbar" onsubmit={submitGuess}>
       <input
         class="field"
         bind:value={guess}
-        placeholder={myGuess ? 'Change your guess…' : 'What is it?'}
+        placeholder={myGuess ? t.s.changeGuessPlaceholder : t.s.whatIsIt}
         maxlength="100"
-        aria-label="Your guess"
+        aria-label={t.s.yourGuess}
+        onkeydown={onGuessKey}
+        oncompositionstart={() => (composing = true)}
+        oncompositionend={() => (composing = false)}
       />
-      <button class="btn primary" disabled={!guess.trim()}>{myGuess ? 'Change' : 'Guess'}</button>
+      <button class="btn primary" disabled={!guess.trim()}>{myGuess ? t.s.changeBtn : t.s.guessBtn}</button>
     </form>
 
     {#if myGuess}
       <div class="mine" in:scale={{ duration: 260, start: 0.85 }}>
-        <span class="tag">Your guess</span>
+        <span class="tag">{t.s.yourGuess}</span>
         <strong>{myGuess.text}</strong>
       </div>
     {/if}

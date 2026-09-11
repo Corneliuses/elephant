@@ -37,7 +37,7 @@ npm run dev                               # wrangler dev (worker + DO + built as
 npm run dev:web                           # vite, :5173, proxies /api to :8787
 npm run build                             # vite build -> web/dist (deploy needs this first)
 npm run check:web                         # svelte-check
-npm run e2e                               # six scenarios in 3 browser contexts; needs `npm run dev`
+npm run e2e                               # seven scenarios in 3 browser contexts; needs `npm run dev`
 node scripts/icons.mjs                    # regenerate PWA icons after changing the mark
 ```
 
@@ -63,6 +63,12 @@ from Cloudflare, read the clock, or call `Math.random`.
   a `timeout` event when it fires. `timeout` before any deadline is a
   no-op; when two deadlines have both passed, the *earlier* one is
   processed and the caller is expected to fire again.
+- `fail(state, code, message)`: every rejection carries a stable
+  `ErrorCode` as well as English prose. The prose is what tests match; the
+  code is what the client turns into the player's own language. Add both.
+- Player text (`name`, `guess`, `intent`) is composed to NFC and measured
+  in **code points**, not UTF-16 units — see `clean` / `len` / `clip`. Use
+  them rather than `.trim()`, `.length` and `.slice()` on anything typed.
 - `project(state, viewerId)` is what goes over the wire. It hides guess
   authors (except the viewer's own) and the drawer's `intent` until the
   reveal phase, and strips `nextGuessSeq`.
@@ -146,6 +152,11 @@ is no re-render, so no memoisation.
   which is what a phone unlocking actually produces.
 - `lib/clock.svelte.ts` is one rAF loop for every countdown, corrected by
   the `now` the server stamps on each `state` message.
+- `lib/i18n.svelte.ts` is the other singleton: the player's own language
+  (en/fr/es/zh), a `Strings` dictionary per language, and `t.error(code)`
+  for server refusals. Every player in a room can be on a different one.
+  New user-visible text goes in `Strings` — all four languages, or it is a
+  type error. Nothing a player *types* is ever translated.
 - `$shared/*` aliases to `src/*`, so the client imports `ProjectedState`
   and `ClientMessage` from the worker source. Protocol drift is a type
   error.
@@ -165,6 +176,12 @@ Rules that are easy to get wrong here:
   a `pending` override that releases once the server agrees.
 - Animation comes from `svelte/transition`, `svelte/animate` and CSS.
   Do not add a motion library.
+- **Text inputs must survive an IME.** The Enter that commits a Chinese
+  candidate is the same Enter that submits a form, so check
+  `e.isComposing` (and track `compositionstart`/`end`) before acting on
+  it, and read an input's `.value` rather than its binding when a tap has
+  to flush what is in the field. `scripts/e2e.mjs` types ASCII, so it will
+  not catch a regression here.
 
 ## Tests
 
@@ -177,11 +194,13 @@ invariant with a recording fake 2D context — that logic lives in
 `lib/paint.ts` rather than `Canvas.svelte` precisely so it can be tested
 without a browser.
 
-`scripts/e2e.mjs` runs six scenarios in real browsers against
+`scripts/e2e.mjs` runs seven scenarios in real browsers against
 `wrangler dev`: a full game to the gallery, the drawing timer expiring
 untouched, judging timing out with no awards, a drawer vanishing mid-turn,
-a second round, and the drawer being refused `end_drawing` until they say
-what they are drawing. Each scenario builds its own room, with short timers
+a second round, the drawer being refused `end_drawing` until they say
+what they are drawing, and three players in one room in three different
+languages. Contexts are pinned to `locale: 'en-US'` so the other six read
+English whatever the machine is set to. Each scenario builds its own room, with short timers
 where it needs them. This has caught bugs that unit tests and typechecking
 did not; run it after changing anything in `web/` or the wire protocol.
 
@@ -197,6 +216,12 @@ inboxes; remember the server sends the stroke reset before the state.
 The v8 provider cannot instrument code executing inside the workerd pool,
 so `src/room/` reports 0% despite being well covered, and `.svelte`
 components are exercised by `scripts/e2e.mjs`, which coverage cannot see.
+
+`i18n.test.ts` checks each dictionary end to end: every phrase says
+something, every interpolated value survives translation (a dropped
+`${name}` still typechecks), language detection walks the preference list
+on the primary subtag, and no refusal shows English to a player who did
+not pick it.
 Including either would read as a gap where there is none.
 
 `src/game/machine.test.ts` is organised by event, with helpers at the top
@@ -213,6 +238,7 @@ and keep the docs' events table current.
   `Ev<T>` alias) for handler signatures.
 - Error strings are matched by regex in tests (e.g. `/organizer/`,
   `/drawing/`, `/3/` for the min-player count). Keep the key noun in the
-  message when rewording.
+  message when rewording — and keep the `ErrorCode` beside it unchanged,
+  since that, not the prose, is what players read.
 - Config lives in `DEFAULT_CONFIG` and is stored on the state; tests use
   the defaults and compute deadlines from them rather than overriding.

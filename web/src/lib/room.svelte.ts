@@ -10,6 +10,7 @@ import type { PlayerId, ProjectedState } from '$shared/game/types'
 import { CLOSE_LEFT, CLOSE_ROOM_GONE, CLOSE_UNAUTHORIZED } from '$shared/room/protocol'
 import type { ClientMessage, ServerMessage, Stroke } from '$shared/room/protocol'
 import { clock } from './clock.svelte'
+import { t } from './i18n.svelte'
 
 export type Status = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'gone'
 
@@ -56,7 +57,11 @@ class Room {
   strokes = $state<Stroke[]>([])
   /** Bumped whenever the buffer is replaced, so the canvas knows to repaint. */
   strokeEpoch = $state(0)
-  /** Last server-rejected action, shown then cleared by the UI. */
+  /**
+   * Last server-rejected action, ready to show. Already in the player's own
+   * language: the server sends a code beside its English prose, and this is
+   * where the two part company.
+   */
   error = $state<string | null>(null)
 
   /* --- derived: recomputed automatically, cached, no dependency array --- */
@@ -200,7 +205,7 @@ class Room {
         }
         break
       case 'error':
-        this.error = msg.message
+        this.error = t.error(msg.code, this.game?.config.minPlayers ?? 3)
         break
     }
   }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { apply, createGame, nextAlarmAt, project } from './machine'
 import { DEFAULT_CONFIG } from './config'
-import type { GameEvent, GameState, GuessId, PlayerId } from './types'
+import type { ErrorCode, GameEvent, GameState, GuessId, PlayerId } from './types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -26,6 +26,13 @@ function fails(state: GameState, ev: GameEvent): string | undefined {
   // State must be unchanged when an error is returned.
   if (r.error) expect(r.state).toBe(state)
   return r.error
+}
+
+/** Apply one event and return the error code the client would localise. */
+function code(state: GameState, ev: GameEvent): ErrorCode | undefined {
+  const r = apply(state, ev)
+  if (r.error) expect(r.state).toBe(state)
+  return r.code
 }
 
 function join(playerId: PlayerId, now = T0): GameEvent {
@@ -130,6 +137,29 @@ describe('join', () => {
   it('rejects a duplicate player id', () => {
     const s = run(createGame('ABCD'), join('a'))
     expect(fails(s, join('a'))).toMatch(/already/)
+  })
+
+  it('composes accents so one name has one spelling', () => {
+    // A French keyboard may send "é" decomposed. Stored that way it compares
+    // unequal to the composed form and eats two of the 24 characters.
+    const s = run(createGame('ABCD'), { type: 'join', now: T0, playerId: 'a', name: 'Ame\u0301lie', avatar: '🐘' })
+    expect(s.players['a']!.name).toBe('Amélie')
+    expect(s.players['a']!.name).toHaveLength(6)
+  })
+
+  it('accepts a name of the full length in any script', () => {
+    const long = '龍'.repeat(CFG.nameMaxLen)
+    const s = run(createGame('ABCD'), { type: 'join', now: T0, playerId: 'a', name: long, avatar: '🐘' })
+    expect(s.players['a']!.name).toBe(long)
+  })
+
+  it('counts an emoji in a name as one character, not two', () => {
+    // Astral code points are two UTF-16 units each; budgeting by unit would
+    // reject a name that is visibly half the limit.
+    const name = '🦋'.repeat(CFG.nameMaxLen)
+    expect(fails(createGame('ABCD'), { type: 'join', now: T0, playerId: 'a', name, avatar: '🐘' })).toBeUndefined()
+    const over = '🦋'.repeat(CFG.nameMaxLen + 1)
+    expect(fails(createGame('ABCD'), { type: 'join', now: T0, playerId: 'a', name: over, avatar: '🐘' })).toMatch(/name/)
   })
 
   it('trims names and rejects empty or over-long ones', () => {
@@ -265,6 +295,20 @@ describe('set_intent', () => {
     expect(s.phase).toBe('judging')
     expect(fails(s, { type: 'set_intent', now: T0, playerId: 'a', text: 'x' })).toMatch(/drawing/)
   })
+
+  it('clips an over-long note by code point, never mid-emoji', () => {
+    // Slicing UTF-16 would leave a lone surrogate, which is not valid text
+    // and does not survive the round trip through storage.
+    const s = run(drawing(), intent('a', '🐘'.repeat(CFG.guessMaxLen + 5)))
+    expect([...s.turn!.intent!]).toHaveLength(CFG.guessMaxLen)
+    expect(s.turn!.intent).toBe('🐘'.repeat(CFG.guessMaxLen))
+    expect(JSON.parse(JSON.stringify(s.turn!.intent))).toBe(s.turn!.intent)
+  })
+
+  it('keeps a note in any script intact', () => {
+    const s = run(drawing(), intent('a', '一只坐在喷气式滑板上的长颈鹿'))
+    expect(s.turn!.intent).toBe('一只坐在喷气式滑板上的长颈鹿')
+  })
 })
 
 describe('submit_guess', () => {
@@ -293,6 +337,11 @@ describe('submit_guess', () => {
     expect(s.turn!.guesses[0]!.text).toBe('cat')
     expect(fails(s, guess('c', '   '))).toMatch(/guess/)
     expect(fails(s, guess('c', 'x'.repeat(CFG.guessMaxLen + 1)))).toMatch(/guess/)
+  })
+
+  it('takes a guess in any language, composed and whole', () => {
+    const s = run(drawing(), guess('b', ' une gire\u0301afe '), guess('c', '长颈鹿'))
+    expect(s.turn!.guesses.map((g) => g.text)).toEqual(['une giréafe', '长颈鹿'])
   })
 
   it('rejects the drawer', () => {
@@ -905,5 +954,76 @@ describe('immutability', () => {
   it('round-trips through JSON (persistable)', () => {
     const s = reveal()
     expect(JSON.parse(JSON.stringify(s))).toEqual(s)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Error codes
+// ---------------------------------------------------------------------------
+
+/*
+ * Every refusal travels to the client as a code as well as English prose, so
+ * a player who picked French is not told "only the organizer can advance".
+ * The prose stays the thing logs and the rest of this file assert on.
+ */
+describe('error codes', () => {
+  it('tags every kind of refusal', () => {
+    const lob = lobby()
+    const dra = drawing()
+    const jud = judging()
+    const rev = reveal()
+    const end = roundEnd()
+    const [bGuess] = guessIds(jud) as [GuessId]
+
+    const cases: [GameState, GameEvent, ErrorCode][] = [
+      [lob, join('a'), 'already_joined'],
+      [lob, { type: 'join', now: T0, playerId: 'z', name: ' ', avatar: '🐘' }, 'invalid_name'],
+      [lob, { type: 'join', now: T0, playerId: 'z', name: 'Zoé', avatar: ' ' }, 'invalid_avatar'],
+      [lob, ready('nobody'), 'unknown_player'],
+      [dra, ready('d', false), 'unready_outside_lobby'],
+      [dra, { type: 'start_game', now: T0, playerId: 'a', seed: 1 }, 'not_in_lobby'],
+      [lob, { type: 'start_game', now: T0, playerId: 'b', seed: 1 }, 'not_organizer'],
+      [dra, intent('b'), 'not_drawer'],
+      [jud, intent('a'), 'not_drawing'],
+      [dra, guess('a', 'me'), 'drawer_cannot_guess'],
+      [dra, guess('d', 'late'), 'not_ready'],
+      [dra, guess('b', '   '), 'invalid_guess'],
+      [dra, { type: 'end_drawing', now: T0, playerId: 'a' }, 'intent_required'],
+      [dra, { type: 'judge', now: T0, playerId: 'a', favoriteGuessId: 'g1' }, 'not_judging'],
+      [jud, { type: 'judge', now: T0, playerId: 'a', favoriteGuessId: 'nope' }, 'unknown_guess'],
+      [lob, { type: 'grade', now: T0, correctGuessId: null, ok: true }, 'nothing_to_grade'],
+      [dra, { type: 'grade', now: T0, correctGuessId: null, ok: true }, 'not_gradeable'],
+      [rev, { type: 'grade', now: T0, correctGuessId: bGuess, ok: true }, 'already_graded'],
+      [jud, { type: 'advance', now: T0, playerId: 'a' }, 'not_reveal'],
+      [rev, { type: 'advance', now: T0, playerId: 'b' }, 'not_organizer'],
+      [rev, { type: 'next_round', now: T0, playerId: 'a', seed: 1 }, 'not_round_end'],
+      [end, { type: 'end_game', now: T0, playerId: 'b' }, 'not_organizer'],
+    ]
+
+    for (const [state, ev, want] of cases) {
+      expect(code(state, ev), `${ev.type} → ${want}`).toBe(want)
+    }
+  })
+
+  it('tags the minimum-player refusal, which a player can actually hit', () => {
+    // Two ready players in the lobby: the one refusal here that is reachable
+    // by tapping a button the client leaves enabled.
+    const s = run(createGame('ABCD'), join('a'), join('b'), ready('a'), ready('b'))
+    expect(code(s, { type: 'start_game', now: T0, playerId: 'a', seed: 1 })).toBe('need_more_players')
+    expect(fails(s, { type: 'start_game', now: T0, playerId: 'a', seed: 1 })).toMatch(/3/)
+  })
+
+  it('tags a rejection after the game has ended', () => {
+    const s = run(roundEnd(), { type: 'end_game', now: T0 + 800, playerId: 'a' })
+    expect(code(s, ready('a'))).toBe('game_ended')
+  })
+
+  it('never returns a message without a code, or a code without a message', () => {
+    const r = apply(lobby(), join('a'))
+    expect(r.error).toBeTruthy()
+    expect(r.code).toBeTruthy()
+    const fine = apply(lobby(), ready('d'))
+    expect(fine.error).toBeUndefined()
+    expect(fine.code).toBeUndefined()
   })
 })

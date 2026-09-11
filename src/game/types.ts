@@ -120,10 +120,44 @@ export type GameEvent =
   | (Base & { type: 'leave'; playerId: PlayerId })
   | (Base & { type: 'timeout' })
 
+/**
+ * Why an event was rejected, as a stable tag rather than prose.
+ *
+ * `ApplyResult.error` stays English and is what logs and tests read; this is
+ * what the client renders, in whichever language its player picked. Codes
+ * group by cause, so several messages can share one — every "only the
+ * organizer can …" refusal is `not_organizer`.
+ */
+export type ErrorCode =
+  | 'game_ended'
+  | 'already_joined'
+  | 'invalid_name'
+  | 'invalid_avatar'
+  | 'unknown_player'
+  | 'not_in_lobby'
+  | 'unready_outside_lobby'
+  | 'not_organizer'
+  | 'need_more_players'
+  | 'not_drawing'
+  | 'not_drawer'
+  | 'drawer_cannot_guess'
+  | 'not_ready'
+  | 'invalid_guess'
+  | 'intent_required'
+  | 'not_judging'
+  | 'unknown_guess'
+  | 'nothing_to_grade'
+  | 'not_gradeable'
+  | 'already_graded'
+  | 'not_reveal'
+  | 'not_round_end'
+
 export interface ApplyResult {
   /** The new state, or the unchanged input state when `error` is set. */
   state: GameState
   error?: string
+  /** Set whenever `error` is. What the client localises. */
+  code?: ErrorCode
 }
 
 /** A guess as seen by a particular viewer. `playerId` is null when hidden. */
