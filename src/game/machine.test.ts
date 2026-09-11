@@ -162,6 +162,33 @@ describe('join', () => {
     expect(fails(createGame('ABCD'), { type: 'join', now: T0, playerId: 'a', name: over, avatar: '🐘' })).toMatch(/name/)
   })
 
+  it('rejects a name that would show as nothing', () => {
+    // trim() does not touch a zero-width space, so without stripping these
+    // the player is seated as a blank chip nobody can identify.
+    const blank = (name: string) =>
+      fails(createGame('ABCD'), { type: 'join', now: T0, playerId: 'a', name, avatar: '🐘' })
+    expect(blank('\u200b\u200b')).toMatch(/name/)
+    expect(blank('\u00ad')).toMatch(/name/)
+    expect(blank('\u2066\u2069')).toMatch(/name/)
+    // Joiners are kept for emoji, so a name of nothing but joiners has to be
+    // caught as blank rather than slipping through as "not empty".
+    expect(blank('\u200d\u200c')).toMatch(/name/)
+  })
+
+  it('strips a bidi override rather than letting it scramble the roster', () => {
+    // U+202E reverses what follows it on every *other* player's screen.
+    const s = run(createGame('ABCD'), { type: 'join', now: T0, playerId: 'a', name: 'Ada\u202elol', avatar: '🐘' })
+    expect(s.players['a']!.name).toBe('Adalol')
+  })
+
+  it('keeps an emoji held together by joiners intact', () => {
+    // 👨‍👩‍👧 is three people plus two U+200D. Strip those and one family
+    // becomes three separate figures.
+    const family = '👨\u200d👩\u200d👧'
+    const s = run(createGame('ABCD'), { type: 'join', now: T0, playerId: 'a', name: `${family} Ada`, avatar: '🐘' })
+    expect(s.players['a']!.name).toBe(`${family} Ada`)
+  })
+
   it('trims names and rejects empty or over-long ones', () => {
     const s = run(createGame('ABCD'), { type: 'join', now: T0, playerId: 'a', name: '  Zed ', avatar: 'x' })
     expect(s.players['a']!.name).toBe('Zed')
@@ -337,6 +364,11 @@ describe('submit_guess', () => {
     expect(s.turn!.guesses[0]!.text).toBe('cat')
     expect(fails(s, guess('c', '   '))).toMatch(/guess/)
     expect(fails(s, guess('c', 'x'.repeat(CFG.guessMaxLen + 1)))).toMatch(/guess/)
+  })
+
+  it('rejects a guess made of nothing visible', () => {
+    const s = drawing()
+    expect(fails(s, guess('b', '\u200b \u200e'))).toMatch(/guess/)
   })
 
   it('takes a guess in any language, composed and whole', () => {

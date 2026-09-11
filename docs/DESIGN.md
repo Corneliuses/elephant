@@ -474,7 +474,12 @@ Each player picks their own; nobody else's screen changes.
   typed — reading a guess you only half understand is part of the game.
   The reducer composes them to NFC and measures lengths in code points,
   so a decomposed "é" costs one character rather than two and a clipped
-  note can never end in half a surrogate pair.
+  note can never end in half a surrogate pair. It also drops characters
+  that are invisible but not joiners — bidi overrides, which reorder text
+  on *other* players' screens, and zero-width blanks, which would seat a
+  player as a chip nobody can identify — and treats what is left as empty
+  if nothing would show. U+200C and U+200D survive: 👨‍👩‍👧 is five code
+  points held together by joiners.
 - Text fields guard against IME composition: the Enter that picks a
   Chinese candidate is the same Enter that submits the form around it.
   The guard is on the **keystroke** (`isComposing`, plus a

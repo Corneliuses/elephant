@@ -109,15 +109,34 @@ function fail(state: GameState, code: ErrorCode, error: string): ApplyResult {
 // ---------------------------------------------------------------------------
 
 /**
+ * Characters that are invisible and have no business in a name or a guess:
+ * bidi controls, which reorder the text after them on *other* players'
+ * screens, and zero-width blanks, which make a name look like nothing at all.
+ *
+ * The two joiners are deliberately not here. U+200D is what holds a
+ * multi-person emoji together — 👨‍👩‍👧 is five code points joined by it, and
+ * stripping them would turn one family into three people — and U+200C is
+ * load-bearing in scripts nobody here translates but a player may still write
+ * their own name in.
+ */
+const INVISIBLE = /[­؜᠎​‎‏‪-‮⁠-⁤⁦-⁩﻿]/gu
+
+/**
  * Tidy a string a player typed, ready to store and compare.
  *
  * NFC matters once names and guesses are not all ASCII: a French keyboard may
  * send "é" as a single code point or as "e" plus a combining acute, which look
  * identical, compare unequal, and cost a different amount of the length
  * budget. Composing on the way in means one form is ever stored.
+ *
+ * Anything that would show as blank comes back empty, so the callers' existing
+ * "not empty" checks reject it rather than seating a player nobody can see.
  */
 function clean(text: string): string {
-  return text.normalize('NFC').trim()
+  const stripped = text.replace(INVISIBLE, '').normalize('NFC').trim()
+  // The joiners survived the strip because emoji need them, but a string of
+  // nothing else is still a blank chip on everybody's screen.
+  return /[^‌‍]/u.test(stripped) ? stripped : ''
 }
 
 /** Length in code points, so an emoji costs 1 rather than 2. */

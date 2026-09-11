@@ -66,9 +66,14 @@ from Cloudflare, read the clock, or call `Math.random`.
 - `fail(state, code, message)`: every rejection carries a stable
   `ErrorCode` as well as English prose. The prose is what tests match; the
   code is what the client turns into the player's own language. Add both.
-- Player text (`name`, `guess`, `intent`) is composed to NFC and measured
-  in **code points**, not UTF-16 units — see `clean` / `len` / `clip`. Use
-  them rather than `.trim()`, `.length` and `.slice()` on anything typed.
+- Player text (`name`, `guess`, `intent`) goes through `clean` / `len` /
+  `clip`, never `.trim()`, `.length` or `.slice()`. `clean` composes to
+  NFC, strips invisible characters that are not joiners (bidi overrides
+  reorder *other* players' rosters; zero-width blanks make a name look
+  like nothing) and returns `''` when nothing would show, so the existing
+  emptiness checks reject it. `len` and `clip` count **code points**, not
+  UTF-16 units. U+200C/U+200D are kept on purpose — emoji are built from
+  them.
 - `project(state, viewerId)` is what goes over the wire. It hides guess
   authors (except the viewer's own) and the drawer's `intent` until the
   reveal phase, and strips `nextGuessSeq`.
