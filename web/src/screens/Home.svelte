@@ -21,14 +21,23 @@
     }
   }
 
+  /**
+   * What the field amounts to: the four letters a room code can be made of.
+   *
+   * Derived rather than read off `joinCode`, because a submit can land while
+   * an IME composition is still open and the field has not been tidied yet.
+   * Navigating with anything else in hand lands on a URL the router's own
+   * pattern rejects, which drops the player back here with no explanation.
+   */
+  const cleanCode = $derived(joinCode.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4))
+
   function joinRoom(e: SubmitEvent) {
     e.preventDefault()
-    const code = joinCode.trim().toUpperCase()
-    if (code.length === 4) router.go(`/g/${code}`)
+    if (cleanCode.length === 4) router.go(`/g/${cleanCode}`)
   }
 
   /**
-   * Keep the field to the four letters a room code can be made of.
+   * Keep the field itself to those letters too.
    *
    * A phone left in a Chinese or Japanese IME emits candidate text into this
    * field, which would eat the 4-character budget with characters no code
@@ -38,7 +47,7 @@
   let composing = $state(false)
   function tidyCode() {
     if (composing) return
-    joinCode = joinCode.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4)
+    joinCode = cleanCode
   }
 </script>
 
@@ -71,7 +80,7 @@
           tidyCode()
         }}
       />
-      <button class="btn ghost" disabled={joinCode.trim().length !== 4}>{t.s.join}</button>
+      <button class="btn ghost" disabled={cleanCode.length !== 4}>{t.s.join}</button>
     </form>
 
     {#if failed}

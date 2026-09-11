@@ -413,7 +413,7 @@ wake-up); the repaint invariant is checked against a recording fake 2D
 context. That logic lives in `lib/paint.ts` rather than in
 `Canvas.svelte` precisely so it can be tested without a browser.
 
-`scripts/e2e.mjs` is the layer none of the above reaches: seven scenarios in
+`scripts/e2e.mjs` is the layer none of the above reaches: eight scenarios in
 real browsers against `wrangler dev`, three browser contexts standing in
 for three phones. It has caught bugs that unit tests and typechecking did
 not — run it after changing anything in `web/` or the wire protocol.
@@ -476,10 +476,16 @@ Each player picks their own; nobody else's screen changes.
   so a decomposed "é" costs one character rather than two and a clipped
   note can never end in half a surrogate pair.
 - Text fields guard against IME composition: the Enter that picks a
-  Chinese candidate is the same Enter that submits a guess, so the guess
-  bar ignores it while `isComposing` is set, and "Done drawing" reads the
-  intent field's own value rather than the binding. The room-code field
-  strips anything outside `A-Z` once a composition ends.
+  Chinese candidate is the same Enter that submits the form around it.
+  The guard is on the **keystroke** (`isComposing`, plus a
+  `compositionstart`/`end` flag), never on the submit — a submit is either
+  that Enter once the composition closed or a tap on the button, which
+  blurred the field and committed it, so refusing one would lose a guess
+  silently. Anything a tap has to flush is read from the element's
+  `.value` rather than its binding. The room-code field strips characters
+  outside `A-Z`, and re-derives the code on submit, since a submit can
+  land while a composition is still open and the field untidied.
+  `scripts/e2e.mjs` drives a real composition over CDP to cover it.
 - Correctness across languages is the grader's problem, and is handled in
   the prompt — see *Grading*.
 

@@ -37,7 +37,7 @@ npm run dev                               # wrangler dev (worker + DO + built as
 npm run dev:web                           # vite, :5173, proxies /api to :8787
 npm run build                             # vite build -> web/dist (deploy needs this first)
 npm run check:web                         # svelte-check
-npm run e2e                               # seven scenarios in 3 browser contexts; needs `npm run dev`
+npm run e2e                               # eight scenarios in 3 browser contexts; needs `npm run dev`
 node scripts/icons.mjs                    # regenerate PWA icons after changing the mark
 ```
 
@@ -177,11 +177,16 @@ Rules that are easy to get wrong here:
 - Animation comes from `svelte/transition`, `svelte/animate` and CSS.
   Do not add a motion library.
 - **Text inputs must survive an IME.** The Enter that commits a Chinese
-  candidate is the same Enter that submits a form, so check
-  `e.isComposing` (and track `compositionstart`/`end`) before acting on
-  it, and read an input's `.value` rather than its binding when a tap has
-  to flush what is in the field. `scripts/e2e.mjs` types ASCII, so it will
-  not catch a regression here.
+  candidate is the same Enter that submits a form. Stop it at the
+  **keystroke** — `e.isComposing`, plus a `compositionstart`/`end` flag —
+  and never refuse the `submit` itself: by the time one arrives it is
+  either that Enter after the composition closed or a tap on the button,
+  which blurred the field and committed it, and swallowing a tap loses a
+  guess with no feedback. Read the input's `.value` rather than its
+  binding when a tap has to flush what is in the field. `page.fill()`
+  cannot test any of this — it sets the value with no composition at all
+  — so the e2e scenario drives a real one over CDP
+  (`Input.imeSetComposition`, then `Input.insertText` to commit).
 
 ## Tests
 
@@ -198,8 +203,9 @@ without a browser.
 `wrangler dev`: a full game to the gallery, the drawing timer expiring
 untouched, judging timing out with no awards, a drawer vanishing mid-turn,
 a second round, the drawer being refused `end_drawing` until they say
-what they are drawing, and three players in one room in three different
-languages. Contexts are pinned to `locale: 'en-US'` so the other six read
+what they are drawing, three players in one room in three different
+languages, and an IME candidate key landing in the name field and the
+guess bar without submitting either form. Contexts are pinned to `locale: 'en-US'` so the other six read
 English whatever the machine is set to. Each scenario builds its own room, with short timers
 where it needs them. This has caught bugs that unit tests and typechecking
 did not; run it after changing anything in `web/` or the wire protocol.

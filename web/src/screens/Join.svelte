@@ -10,9 +10,25 @@
 
   const canJoin = $derived(name.trim().length > 0)
 
+  /*
+   * The one field a player writing Chinese, Japanese or Korean cannot avoid,
+   * and the name they are stuck with for the game. The Enter that picks an
+   * IME candidate would otherwise submit this form and join them as raw
+   * pinyin, so it is stopped at the keystroke; the submit then reads the
+   * element, which holds the committed characters whether it arrived from
+   * that Enter or from a tap on the button.
+   */
+  let nameEl = $state<HTMLInputElement | null>(null)
+  let composing = $state(false)
+
+  function onNameKey(e: KeyboardEvent) {
+    if (e.key === 'Enter' && (e.isComposing || composing)) e.preventDefault()
+  }
+
   function submit(e: SubmitEvent) {
     e.preventDefault()
-    if (canJoin) room.join(name.trim(), avatar)
+    const typed = (nameEl?.value ?? name).trim()
+    if (typed) room.join(typed, avatar)
   }
 </script>
 
@@ -29,11 +45,15 @@
 
   <input
     class="field"
+    bind:this={nameEl}
     bind:value={name}
     placeholder={t.s.yourName}
     maxlength="24"
     autocomplete="given-name"
     aria-label={t.s.yourName}
+    onkeydown={onNameKey}
+    oncompositionstart={() => (composing = true)}
+    oncompositionend={() => (composing = false)}
   />
 
   <div class="grid" role="radiogroup" aria-label={t.s.pickAvatar}>

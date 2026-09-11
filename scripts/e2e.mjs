@@ -121,6 +121,21 @@ async function scribble(page) {
   await page.waitForTimeout(400)
 }
 
+/**
+ * Open a real IME composition in `locator`, the way a phone's Chinese
+ * keyboard does. `page.fill()` cannot reach this: it sets the value outright,
+ * with no composition and no candidate key to get wrong.
+ *
+ * Returns the CDP session, whose `Input.insertText` commits the candidate.
+ */
+async function composeInto(page, locator, text) {
+  const cdp = await page.context().newCDPSession(page)
+  await locator.focus()
+  await cdp.send('Input.imeSetComposition', { text, selectionStart: text.length, selectionEnd: text.length })
+  await page.waitForTimeout(100)
+  return cdp
+}
+
 const assert = (cond, msg) => {
   if (!cond) throw new Error(msg)
 }
@@ -372,6 +387,53 @@ await run('four languages in one room at once', async () => {
   )
   assert(new Set(waiting).size === waiting.length, `both guessers saw the same wait text: ${waiting}`)
   log(`  drawer prompted "${prompt}"; guessers waiting in ${waiting.join(' / ')}`)
+})
+
+await run('an IME candidate key does not submit the form behind it', async () => {
+  // The Enter that picks a Chinese candidate is the same Enter that submits
+  // the form the field sits in. Take the name field first: it is the one a
+  // player writing Chinese cannot avoid, and whatever it sends is the name
+  // they are stuck with for the rest of the game.
+  const code = await createRoom({ config: { drawingMs: 60_000 } })
+  const cy = await newPage()
+  await cy.goto(`${BASE}/g/${code}`)
+  const nameField = cy.getByLabel('Your name')
+  await nameField.waitFor({ timeout: 10000 })
+
+  const cdp = await composeInto(cy, nameField, 'xiaoming')
+  await cy.keyboard.press('Enter')
+  await cy.waitForTimeout(300)
+  assert(await nameField.isVisible(), 'a composing Enter joined the room as raw pinyin')
+
+  // Committing the candidate and tapping Join does work.
+  await cdp.send('Input.insertText', { text: '小明' })
+  await cy.getByRole('button', { name: 'Join the room' }).click()
+  await cy.getByRole('button', { name: /I'm ready/ }).waitFor({ timeout: 10000 })
+  assert((await cy.textContent('.roster')).includes('小明'), 'joined under the wrong name')
+  log('  the name field kept the candidate key to itself')
+
+  // Same key, same trap, on the guess bar.
+  const by = { 小明: cy }
+  for (const name of ['Ada', 'Bo']) by[name] = await joinAs(await newPage(), code, name)
+  for (const p of Object.values(by)) await p.getByRole('button', { name: /I'm ready/ }).click()
+  await cy.waitForFunction(() => document.body.textContent.includes('3'), null, { timeout: 10000 })
+  await cy.getByRole('button', { name: 'Start game' }).click()
+  for (const p of Object.values(by)) await atPhase(p, 'drawing')
+
+  // Ask an English page who is drawing: the helper reads English headers.
+  const drawing = await whoDraws(by, by.Ada)
+  const guesser = Object.entries(by).find(([name]) => name !== drawing)[1]
+  const guessField = guesser.getByLabel(/Your guess|你的猜测/)
+  const cdp2 = await composeInto(guesser, guessField, 'daxiang')
+  await guesser.keyboard.press('Enter')
+  await guesser.waitForTimeout(400)
+  assert(!(await guesser.locator('.mine').isVisible()), 'a composing Enter sent half-typed pinyin as a guess')
+
+  // And a tap on the button is never swallowed, composition or not.
+  await cdp2.send('Input.insertText', { text: '大象' })
+  await guesser.getByRole('button', { name: /^(Guess|提交)$/ }).click()
+  await guesser.getByText('大象').waitFor({ timeout: 10000 })
+  log('  the guess bar waited for the candidate, then sent it on the tap')
 })
 
 // ---------------------------------------------------------------------------

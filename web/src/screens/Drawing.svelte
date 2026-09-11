@@ -54,10 +54,16 @@
    * Text input has to survive an IME. Typing Chinese, Japanese or Korean
    * means composing several keystrokes into each character, and the Enter
    * that picks a candidate is the same Enter that would submit this form —
-   * which would send half-finished pinyin as somebody's guess. Watching the
-   * composition events (and `isComposing` on the keystroke itself, which is
-   * true for the commit press) keeps the two apart.
+   * which would send half-finished pinyin as somebody's guess.
+   *
+   * The keystroke is where the two are told apart, because that is the only
+   * place they differ: a commit Enter carries `isComposing`, so it is
+   * stopped before it can submit anything. By the time a submit does arrive
+   * it is either that same Enter after the composition closed, or a tap on
+   * the button — which blurred the field first, committing the composition.
+   * Neither is ever refused: swallowing a tap loses a guess silently.
    */
+  let guessEl = $state<HTMLInputElement | null>(null)
   let composing = $state(false)
 
   function onGuessKey(e: KeyboardEvent) {
@@ -66,8 +72,8 @@
 
   function submitGuess(e: SubmitEvent) {
     e.preventDefault()
-    if (composing) return
-    const text = guess.trim()
+    // The element, not the binding: it holds the committed characters.
+    const text = (guessEl?.value ?? guess).trim()
     if (!text) return
     room.send({ type: 'submit_guess', text })
     // The card below becomes the record; the field goes back to inviting a change.
@@ -181,6 +187,7 @@
     <form class="guessbar" onsubmit={submitGuess}>
       <input
         class="field"
+        bind:this={guessEl}
         bind:value={guess}
         placeholder={myGuess ? t.s.changeGuessPlaceholder : t.s.whatIsIt}
         maxlength="100"
