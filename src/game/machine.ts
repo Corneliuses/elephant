@@ -49,7 +49,8 @@ export function createGame(code: string, config: Partial<GameConfig> = {}): Game
 // ---------------------------------------------------------------------------
 
 const CONNECTION_EVENTS = new Set<GameEvent['type']>(['timeout', 'disconnect', 'reconnect', 'leave'])
-const LIVE_PHASES: readonly Phase[] = ['drawing', 'judging', 'reveal']
+/** Phases with a live turn: a late-ready player joins the draw order here. */
+const LIVE_PHASES: readonly Phase[] = ['prep', 'drawing', 'judging', 'reveal']
 
 export function apply(state: GameState, event: GameEvent): ApplyResult {
   if (state.phase === 'ended' && !CONNECTION_EVENTS.has(event.type)) {
@@ -65,6 +66,8 @@ export function apply(state: GameState, event: GameEvent): ApplyResult {
       return startGame(state, event)
     case 'set_intent':
       return setIntent(state, event)
+    case 'start_drawing':
+      return startDrawing(state, event)
     case 'submit_guess':
       return submitGuess(state, event)
     case 'end_drawing':
@@ -73,6 +76,8 @@ export function apply(state: GameState, event: GameEvent): ApplyResult {
       return judge(state, event)
     case 'grade':
       return grade(state, event)
+    case 'translate':
+      return translate(state, event)
     case 'advance':
       return advance(state, event)
     case 'next_round':
@@ -131,8 +136,11 @@ const INVISIBLE = /[­؜᠎​‎‏‪-‮⁠-⁤⁦-⁩﻿]/gu
  *
  * Anything that would show as blank comes back empty, so the callers' existing
  * "not empty" checks reject it rather than seating a player nobody can see.
+ *
+ * Exported for the client, so a button it gates on "something was typed"
+ * agrees with the refusal the server would send.
  */
-function clean(text: string): string {
+export function clean(text: string): string {
   const stripped = text.replace(INVISIBLE, '').normalize('NFC').trim()
   // The joiners survived the strip because emoji need them, but a string of
   // nothing else is still a blank chip on everybody's screen.
@@ -201,16 +209,33 @@ function startGame(state: GameState, ev: Ev<'start_game'>): ApplyResult {
   return ok(startRound(state, shuffle(eligible, ev.seed), 1, ev.now))
 }
 
-// --- Drawing ---------------------------------------------------------------
+// --- Prep ------------------------------------------------------------------
 
+/**
+ * The drawer's note of what they will draw. Only while the turn is being
+ * set up: once the clock is running the note is fixed, since it is what
+ * every guess is graded against.
+ */
 function setIntent(state: GameState, ev: Ev<'set_intent'>): ApplyResult {
-  if (state.phase !== 'drawing' || !state.turn) return fail(state, 'not_drawing', 'not in drawing phase')
+  if (state.phase !== 'prep' || !state.turn) return fail(state, 'not_prep', 'not in prep phase')
   if (ev.playerId !== state.turn.drawerId) return fail(state, 'not_drawer', 'only the drawer can set intent')
   // Silently clipped rather than rejected: this arrives from a debounced
   // keystroke, so there is no tap to refuse.
   const text = clip(clean(ev.text), state.config.guessMaxLen)
   return ok({ ...state, turn: { ...state.turn, intent: text.length > 0 ? text : null } })
 }
+
+/** The drawer is ready: start the drawing clock. */
+function startDrawing(state: GameState, ev: Ev<'start_drawing'>): ApplyResult {
+  if (state.phase !== 'prep' || !state.turn) return fail(state, 'not_prep', 'not in prep phase')
+  if (ev.playerId !== state.turn.drawerId) return fail(state, 'not_drawer', 'only the drawer can start drawing')
+  // The grader compares guesses against this, so there is nothing to grade
+  // without it. The client keeps "Start" disabled until it is set.
+  if (state.turn.intent === null) return fail(state, 'intent_required', 'say what you are drawing first')
+  return ok({ ...state, phase: 'drawing', timerEndsAt: ev.now + state.config.drawingMs })
+}
+
+// --- Drawing ---------------------------------------------------------------
 
 function submitGuess(state: GameState, ev: Ev<'submit_guess'>): ApplyResult {
   if (state.phase !== 'drawing' || !state.turn) return fail(state, 'not_drawing', 'not in drawing phase')
@@ -223,9 +248,10 @@ function submitGuess(state: GameState, ev: Ev<'submit_guess'>): ApplyResult {
 
   const existing = state.turn.guesses.find((g) => g.playerId === player.id)
   const others = state.turn.guesses.filter((g) => g.playerId !== player.id)
+  // An edited guess is new text, so any translation of the old one goes.
   const guess: Guess = existing
-    ? { ...existing, text, submittedAt: ev.now }
-    : { id: `g${state.nextGuessSeq}`, playerId: player.id, text, submittedAt: ev.now }
+    ? { ...existing, text, submittedAt: ev.now, translations: null }
+    : { id: `g${state.nextGuessSeq}`, playerId: player.id, text, submittedAt: ev.now, translations: null }
 
   return ok({
     ...state,
@@ -237,10 +263,23 @@ function submitGuess(state: GameState, ev: Ev<'submit_guess'>): ApplyResult {
 function endDrawing(state: GameState, ev: Ev<'end_drawing'>): ApplyResult {
   if (state.phase !== 'drawing' || !state.turn) return fail(state, 'not_drawing', 'not in drawing phase')
   if (ev.playerId !== state.turn.drawerId) return fail(state, 'not_drawer', 'only the drawer can end drawing')
-  // The grader compares guesses against this, so there is nothing to grade
-  // without it. The client keeps "Done" disabled until it is set.
-  if (state.turn.intent === null) return fail(state, 'intent_required', 'say what you are drawing first')
+  // Everyone else needs a fair look before the drawer can call it. The
+  // client keeps "Done" locked until then; the server clock decides.
+  if (ev.now < earliestEndAt(state)) return fail(state, 'too_early', 'keep drawing a little longer')
   return ok(finishDrawing(state, ev.now))
+}
+
+/**
+ * When the drawer may first finish. The clock started `drawingMs` before
+ * the deadline, so this needs no field of its own. Shared with the client,
+ * which keeps "Done" locked until then, hence the narrow parameter.
+ */
+export function earliestEndAt(state: Pick<GameState, 'timerEndsAt' | 'config'>): number {
+  if (state.timerEndsAt === null) return 0
+  const { drawingMs, minDrawingMs } = state.config
+  // A minimum longer than the clock itself would lock "Done" until the
+  // timer ends the turn anyway; the deadline is the latest it can be.
+  return state.timerEndsAt - drawingMs + Math.min(minDrawingMs, drawingMs)
 }
 
 // --- Judging ---------------------------------------------------------------
@@ -287,6 +326,29 @@ function grade(state: GameState, ev: Ev<'grade'>): ApplyResult {
   return ok(next)
 }
 
+/**
+ * The translator's rendering of the live turn, applied by the transport.
+ * Accepted during judging or reveal, like `grade`, and for the same reason:
+ * it is a network call that lands whenever it lands. Ids that match no
+ * guess are ignored rather than refused, since a guess can be withdrawn by
+ * its author leaving while the request is out.
+ */
+function translate(state: GameState, ev: Ev<'translate'>): ApplyResult {
+  const live = state.turn
+  if (!live) return fail(state, 'nothing_to_grade', 'no turn to translate')
+  if (state.phase !== 'judging' && state.phase !== 'reveal') return fail(state, 'not_gradeable', 'not translatable now')
+
+  const turn: Turn = {
+    ...live,
+    intentTranslations: ev.intent ?? live.intentTranslations,
+    guesses: live.guesses.map((g) => (ev.guesses[g.id] ? { ...g, translations: ev.guesses[g.id]! } : g)),
+  }
+  let next: GameState = { ...state, turn }
+  // During reveal the live turn is already recorded, so keep both in step.
+  if (state.phase === 'reveal') next = { ...next, turns: [...state.turns.slice(0, -1), turn] }
+  return ok(next)
+}
+
 // --- Reveal / round end ----------------------------------------------------
 
 function advance(state: GameState, ev: Ev<'advance'>): ApplyResult {
@@ -319,7 +381,7 @@ function disconnect(state: GameState, ev: Ev<'disconnect'>): ApplyResult {
 
   let next = setPlayer(state, player.id, { connected: false })
   if (state.organizerId === player.id) next = promoteOrganizer(next)
-  if (isJudgeablePhase(state) && state.turn?.drawerId === player.id) {
+  if (needsDrawer(state) && state.turn?.drawerId === player.id) {
     next = { ...next, graceEndsAt: ev.now + state.config.graceMs }
   }
   return ok(next)
@@ -359,7 +421,7 @@ function leave(state: GameState, ev: Ev<'leave'>): ApplyResult {
     return ok({ ...next, drawOrder })
   }
   // The leaver is the current drawer.
-  if (isJudgeablePhase(next) && next.turn) {
+  if (needsDrawer(next) && next.turn) {
     // Their turn is abandoned; the slot they vacated now holds the next drawer.
     return ok(beginTurn(recordSkipped({ ...next, drawOrder }), idx, ev.now))
   }
@@ -381,7 +443,7 @@ function timeout(state: GameState, ev: Ev<'timeout'>): ApplyResult {
 
   if (graceFirst) {
     const drawerGone = state.turn && !state.players[state.turn.drawerId]?.connected
-    if (isJudgeablePhase(state) && drawerGone) {
+    if (needsDrawer(state) && drawerGone) {
       return ok(beginTurn(recordSkipped(state), state.drawerIdx + 1, ev.now))
     }
     // Stale grace (drawer came back, or phase moved on): just clear it.
@@ -389,6 +451,10 @@ function timeout(state: GameState, ev: Ev<'timeout'>): ApplyResult {
   }
 
   switch (state.phase) {
+    case 'prep':
+      // Never said what they would draw: nothing could be graded, and the
+      // room has waited long enough. Their turn is skipped.
+      return ok(beginTurn(recordSkipped(state), state.drawerIdx + 1, ev.now))
     case 'drawing':
       return ok(finishDrawing(state, ev.now))
     case 'judging':
@@ -416,7 +482,8 @@ function startRound(state: GameState, order: PlayerId[], round: number, now: num
 
 /**
  * Start the turn at `idx`, skipping over disconnected drawers. If nobody is
- * left, end the round.
+ * left, end the round. A turn opens in `prep`: the drawer says what they
+ * will draw, and the drawing clock only starts once they have.
  */
 function beginTurn(state: GameState, idx: number, now: number): GameState {
   let next = state
@@ -427,6 +494,7 @@ function beginTurn(state: GameState, idx: number, now: number): GameState {
         round: next.round,
         drawerId,
         intent: null,
+        intentTranslations: null,
         guesses: [],
         correctGuessId: null,
         grading: 'pending',
@@ -435,10 +503,10 @@ function beginTurn(state: GameState, idx: number, now: number): GameState {
       }
       return {
         ...next,
-        phase: 'drawing',
+        phase: 'prep',
         drawerIdx: idx,
         turn,
-        timerEndsAt: now + next.config.drawingMs,
+        timerEndsAt: now + next.config.prepMs,
         graceEndsAt: null,
       }
     }
@@ -450,6 +518,7 @@ function beginTurn(state: GameState, idx: number, now: number): GameState {
           round: next.round,
           drawerId,
           intent: null,
+          intentTranslations: null,
           guesses: [],
           correctGuessId: null,
           grading: 'unavailable',
@@ -504,8 +573,9 @@ function recordSkipped(state: GameState): GameState {
 // Small helpers
 // ---------------------------------------------------------------------------
 
-function isJudgeablePhase(state: GameState): boolean {
-  return state.phase === 'drawing' || state.phase === 'judging'
+/** Phases the turn cannot proceed without its drawer: losing them skips it. */
+function needsDrawer(state: GameState): boolean {
+  return state.phase === 'prep' || state.phase === 'drawing' || state.phase === 'judging'
 }
 
 function eligiblePlayers(state: GameState): PlayerId[] {
@@ -552,17 +622,24 @@ export function project(state: GameState, viewerId: PlayerId | null): ProjectedS
   const { turn, nextGuessSeq: _seq, ...rest } = state
   const revealed = !LIVE_PHASES.includes(state.phase) || state.phase === 'reveal'
 
-  const projectTurn = (t: Turn, everything: boolean): ProjectedTurn => ({
-    ...t,
-    intent: everything || t.drawerId === viewerId ? t.intent : null,
-    // Nobody sees the verdict before the reveal, drawer included: it would
-    // colour their favourite pick and spoil the moment.
-    correctGuessId: everything ? t.correctGuessId : null,
-    guesses: t.guesses.map((g) => ({
-      ...g,
-      playerId: everything || g.playerId === viewerId ? g.playerId : null,
-    })),
-  })
+  const projectTurn = (t: Turn, everything: boolean): ProjectedTurn => {
+    const mine = t.drawerId === viewerId
+    return {
+      ...t,
+      intent: everything || mine ? t.intent : null,
+      intentTranslations: everything || mine ? t.intentTranslations : null,
+      // Nobody sees the verdict before the reveal, drawer included: it would
+      // colour their favourite pick and spoil the moment.
+      correctGuessId: everything ? t.correctGuessId : null,
+      guesses: t.guesses.map((g) => ({
+        ...g,
+        playerId: everything || g.playerId === viewerId ? g.playerId : null,
+      })),
+      // Sorted by id, not submission: paired with the guess list in
+      // submission order it would say who wrote what.
+      answered: t.guesses.map((g) => g.playerId).sort(),
+    }
+  }
 
   return {
     ...rest,

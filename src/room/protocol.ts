@@ -22,6 +22,8 @@ export type ClientMessage =
   | { type: 'set_ready'; ready: boolean }
   | { type: 'start_game' }
   | { type: 'set_intent'; text: string }
+  /** The note is written: start the drawing clock. */
+  | { type: 'start_drawing' }
   | { type: 'submit_guess'; text: string }
   | { type: 'end_drawing' }
   /** The drawer's only judgement: which answer they liked most. Correctness

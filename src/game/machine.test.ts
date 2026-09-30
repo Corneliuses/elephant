@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { apply, createGame, nextAlarmAt, project } from './machine'
+import { apply, createGame, earliestEndAt, nextAlarmAt, project } from './machine'
 import { DEFAULT_CONFIG } from './config'
 import type { ErrorCode, GameEvent, GameState, GuessId, PlayerId } from './types'
 
@@ -9,6 +9,12 @@ import type { ErrorCode, GameEvent, GameState, GuessId, PlayerId } from './types
 
 const T0 = 1_000_000
 const CFG = DEFAULT_CONFIG
+/**
+ * The drawing clock in the fixtures starts at T0 + 10, and the drawer may
+ * not finish before `minDrawingMs` has run. Everything after the drawing
+ * phase is timed from here.
+ */
+const T1 = T0 + 10 + CFG.minDrawingMs
 
 /** Apply a chain of events, asserting none of them error. */
 function run(state: GameState, ...events: GameEvent[]): GameState {
@@ -47,9 +53,13 @@ function guess(playerId: PlayerId, text: string, now = T0 + 1000): GameEvent {
 function intent(playerId: PlayerId, text = 'a giraffe on a jet ski', now = T0 + 20): GameEvent {
   return { type: 'set_intent', now, playerId, text }
 }
-/** Finishing requires an intent, so most fixtures set one first. */
-function done(playerId: PlayerId, now = T0 + 500): GameEvent[] {
-  return [intent(playerId, 'a giraffe on a jet ski', now - 1), { type: 'end_drawing', now, playerId }]
+/** Starting the clock requires an intent, so say what it is and go. */
+function begin(playerId: PlayerId, now: number, text = 'a giraffe on a jet ski'): GameEvent[] {
+  return [intent(playerId, text, now), { type: 'start_drawing', now, playerId }]
+}
+/** Finish drawing. Only accepted `minDrawingMs` after the clock started. */
+function done(playerId: PlayerId, now = T1 + 500): GameEvent {
+  return { type: 'end_drawing', now, playerId }
 }
 
 /** Lobby with players a, b, c, d — a is organizer; a, b, c ready; d not ready. */
@@ -66,8 +76,8 @@ function lobby(): GameState {
   )
 }
 
-/** A game in the drawing phase with a, b, c in the order given. */
-function drawing(order: PlayerId[] = ['a', 'b', 'c'], now = T0 + 10): GameState {
+/** A game just started, in prep, with a, b, c in the order given. */
+function prep(order: PlayerId[] = ['a', 'b', 'c'], now = T0 + 10): GameState {
   let s = lobby()
   // Find a seed that yields the requested order so tests can be explicit.
   for (let seed = 0; seed < 500; seed++) {
@@ -76,6 +86,11 @@ function drawing(order: PlayerId[] = ['a', 'b', 'c'], now = T0 + 10): GameState 
     if (r.state.drawOrder.join() === order.join()) return r.state
   }
   throw new Error(`no seed produced order ${order.join()}`)
+}
+
+/** The same game with the first drawer's note written and the clock running. */
+function drawing(order: PlayerId[] = ['a', 'b', 'c'], now = T0 + 10): GameState {
+  return run(prep(order, now), ...begin(order[0]!, now))
 }
 
 function drawerOf(s: GameState): PlayerId {
@@ -204,7 +219,7 @@ describe('join', () => {
   })
 
   it('does not put a mid-game joiner into the draw order until they are ready', () => {
-    const s = run(drawing(), join('z', T0 + 50))
+    const s = run(prep(), join('z', T0 + 50))
     expect(s.players['z']).toBeDefined()
     expect(s.drawOrder).toEqual(['a', 'b', 'c'])
   })
@@ -226,6 +241,9 @@ describe('set_ready', () => {
   it('appends a late-ready player to the draw order mid-round', () => {
     const s = run(drawing(), join('z', T0 + 50), ready('z', true, T0 + 51))
     expect(s.drawOrder).toEqual(['a', 'b', 'c', 'z'])
+    // Also while the drawer is still deciding what to draw.
+    const p = run(prep(), join('z', T0 + 50), ready('z', true, T0 + 51))
+    expect(p.drawOrder).toEqual(['a', 'b', 'c', 'z'])
   })
 
   it('does not duplicate a player already in the draw order', () => {
@@ -279,22 +297,25 @@ describe('start_game', () => {
     expect(orders.size).toBeGreaterThan(1)
   })
 
-  it('enters drawing with round 1, the first drawer, a fresh turn, and a timer', () => {
+  it('enters prep with round 1, the first drawer, a fresh turn, and a timer', () => {
+    // The drawing clock does not start yet: the drawer first says what they
+    // will draw, and has `prepMs` to do it.
     const s = run(lobby(), { type: 'start_game', now: T0 + 10, playerId: 'a', seed: 1 })
-    expect(s.phase).toBe('drawing')
+    expect(s.phase).toBe('prep')
     expect(s.round).toBe(1)
     expect(s.drawerIdx).toBe(0)
     expect(s.turn).toEqual({
       round: 1,
       drawerId: s.drawOrder[0],
       intent: null,
+      intentTranslations: null,
       guesses: [],
       correctGuessId: null,
       grading: 'pending',
       favoriteGuessId: null,
       skipped: false,
     })
-    expect(s.timerEndsAt).toBe(T0 + 10 + CFG.drawingMs)
+    expect(s.timerEndsAt).toBe(T0 + 10 + CFG.prepMs)
     expect(s.graceEndsAt).toBeNull()
   })
 
@@ -304,39 +325,100 @@ describe('start_game', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Drawing
+// Prep
 // ---------------------------------------------------------------------------
 
 describe('set_intent', () => {
   it('lets the drawer record what they are drawing', () => {
-    const s = run(drawing(), { type: 'set_intent', now: T0 + 20, playerId: 'a', text: '  a giraffe on a jet ski ' })
+    const s = run(prep(), { type: 'set_intent', now: T0 + 20, playerId: 'a', text: '  a giraffe on a jet ski ' })
     expect(s.turn!.intent).toBe('a giraffe on a jet ski')
+    expect(s.phase).toBe('prep')
   })
 
   it('rejects non-drawers', () => {
-    expect(fails(drawing(), { type: 'set_intent', now: T0, playerId: 'b', text: 'x' })).toMatch(/drawer/)
+    expect(fails(prep(), { type: 'set_intent', now: T0, playerId: 'b', text: 'x' })).toMatch(/drawer/)
   })
 
-  it('rejects outside the drawing phase', () => {
-    const s = run(drawing(), guess('b', 'cat'), ...done('a', T0 + 30))
+  it('is fixed once the clock is running', () => {
+    // The note is what every guess is graded against, so it cannot change
+    // under the guessers once they have started.
+    expect(fails(drawing(), { type: 'set_intent', now: T0 + 20, playerId: 'a', text: 'x' })).toMatch(/prep/)
+    const s = run(drawing(), guess('b', 'cat'), done('a'))
     expect(s.phase).toBe('judging')
-    expect(fails(s, { type: 'set_intent', now: T0, playerId: 'a', text: 'x' })).toMatch(/drawing/)
+    expect(fails(s, { type: 'set_intent', now: T0, playerId: 'a', text: 'x' })).toMatch(/prep/)
   })
 
   it('clips an over-long note by code point, never mid-emoji', () => {
     // Slicing UTF-16 would leave a lone surrogate, which is not valid text
     // and does not survive the round trip through storage.
-    const s = run(drawing(), intent('a', '🐘'.repeat(CFG.guessMaxLen + 5)))
+    const s = run(prep(), intent('a', '🐘'.repeat(CFG.guessMaxLen + 5)))
     expect([...s.turn!.intent!]).toHaveLength(CFG.guessMaxLen)
     expect(s.turn!.intent).toBe('🐘'.repeat(CFG.guessMaxLen))
     expect(JSON.parse(JSON.stringify(s.turn!.intent))).toBe(s.turn!.intent)
   })
 
   it('keeps a note in any script intact', () => {
-    const s = run(drawing(), intent('a', '一只坐在喷气式滑板上的长颈鹿'))
+    const s = run(prep(), intent('a', '一只坐在喷气式滑板上的长颈鹿'))
     expect(s.turn!.intent).toBe('一只坐在喷气式滑板上的长颈鹿')
   })
 })
+
+describe('start_drawing', () => {
+  it('starts the drawing clock once the note is written', () => {
+    const s = run(prep(), intent('a'), { type: 'start_drawing', now: T0 + 40, playerId: 'a' })
+    expect(s.phase).toBe('drawing')
+    expect(s.timerEndsAt).toBe(T0 + 40 + CFG.drawingMs)
+    expect(s.turn!.intent).toBe('a giraffe on a jet ski')
+  })
+
+  it('refuses until the drawer has said what it is', () => {
+    // The grader has nothing to compare against without this.
+    expect(fails(prep(), { type: 'start_drawing', now: T0 + 40, playerId: 'a' })).toMatch(/drawing/)
+    // A note that was then blanked out counts as none.
+    const blank = run(prep(), intent('a'), intent('a', '   '))
+    expect(fails(blank, { type: 'start_drawing', now: T0 + 40, playerId: 'a' })).toMatch(/drawing/)
+  })
+
+  it('rejects non-drawers and the wrong phase', () => {
+    expect(fails(run(prep(), intent('a')), { type: 'start_drawing', now: T0, playerId: 'b' })).toMatch(/drawer/)
+    expect(fails(drawing(), { type: 'start_drawing', now: T0, playerId: 'a' })).toMatch(/prep/)
+    expect(fails(lobby(), { type: 'start_drawing', now: T0, playerId: 'a' })).toMatch(/prep/)
+  })
+
+  it('takes no guesses while the drawer is still deciding', () => {
+    expect(fails(prep(), guess('b', 'cat'))).toMatch(/drawing/)
+  })
+})
+
+describe('timeout during prep', () => {
+  it('is a no-op before the deadline', () => {
+    const s = prep()
+    const r = apply(s, { type: 'timeout', now: s.timerEndsAt! - 1 })
+    expect(r.error).toBeUndefined()
+    expect(r.state).toBe(s)
+  })
+
+  it('skips a drawer who never said what they would draw', () => {
+    // Nothing could be graded, and the room has waited long enough.
+    const s0 = prep()
+    const s = run(s0, { type: 'timeout', now: s0.timerEndsAt! })
+    expect(s.turns).toHaveLength(1)
+    expect(s.turns[0]).toMatchObject({ drawerId: 'a', skipped: true, grading: 'unavailable' })
+    expect(s.phase).toBe('prep')
+    expect(drawerOf(s)).toBe('b')
+    expect(s.timerEndsAt).toBe(s0.timerEndsAt! + CFG.prepMs)
+  })
+
+  it('a note without a start is still a skip', () => {
+    const s0 = run(prep(), intent('a'))
+    const s = run(s0, { type: 'timeout', now: s0.timerEndsAt! })
+    expect(s.turns[0]).toMatchObject({ drawerId: 'a', skipped: true })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Drawing
+// ---------------------------------------------------------------------------
 
 describe('submit_guess', () => {
   it('records a guess in submission order with a stable id', () => {
@@ -387,22 +469,52 @@ describe('submit_guess', () => {
   })
 
   it('rejects outside the drawing phase', () => {
-    const s = run(drawing(), guess('b', 'cat'), ...done('a', T0 + 30))
+    const s = run(drawing(), guess('b', 'cat'), done('a'))
     expect(fails(s, guess('c', 'late'))).toMatch(/drawing/)
+  })
+
+  it('starts a fresh translation when a guess is edited', () => {
+    const s0 = run(drawing(), guess('b', 'cat', T0 + 100))
+    const translated: GameState = {
+      ...s0,
+      turn: { ...s0.turn!, guesses: [{ ...s0.turn!.guesses[0]!, translations: { fr: 'chat' } }] },
+    }
+    const s = run(translated, guess('b', 'dog', T0 + 200))
+    expect(s.turn!.guesses[0]!.translations).toBeNull()
   })
 })
 
 describe('end_drawing', () => {
   it('moves to judging with a judging timer when there are guesses', () => {
-    const s = run(drawing(), guess('b', 'cat'), ...done('a'))
+    const s = run(drawing(), guess('b', 'cat'), done('a'))
     expect(s.phase).toBe('judging')
-    expect(s.timerEndsAt).toBe(T0 + 500 + CFG.judgingMs)
+    expect(s.timerEndsAt).toBe(T1 + 500 + CFG.judgingMs)
+  })
+
+  it('refuses until the drawer has drawn for the minimum time', () => {
+    // Everyone else needs a fair look before the drawer can call it.
+    const s = run(drawing(), guess('b', 'cat'))
+    expect(earliestEndAt(s)).toBe(T0 + 10 + CFG.minDrawingMs)
+    expect(fails(s, done('a', earliestEndAt(s) - 1))).toMatch(/longer/)
+    expect(run(s, done('a', earliestEndAt(s))).phase).toBe('judging')
+  })
+
+  it('has no minimum outside a running clock', () => {
+    expect(earliestEndAt(lobby())).toBe(0)
+  })
+
+  it('never puts the minimum past the end of the clock', () => {
+    // A room with a short clock and the default minimum: the deadline is
+    // as late as finishing can be gated, or "Done" would never unlock.
+    const s: GameState = { ...drawing(), config: { ...CFG, drawingMs: 1000, minDrawingMs: 30_000 } }
+    const s1: GameState = { ...s, timerEndsAt: T0 + 10 + 1000 }
+    expect(earliestEndAt(s1)).toBe(s1.timerEndsAt)
   })
 
   it('skips straight to reveal when there are no guesses', () => {
-    const s = run(drawing(), ...done('a'))
+    const s = run(drawing(), done('a'))
     expect(s.phase).toBe('reveal')
-    expect(s.timerEndsAt).toBe(T0 + 500 + CFG.revealMs)
+    expect(s.timerEndsAt).toBe(T1 + 500 + CFG.revealMs)
     expect(s.turn!.correctGuessId).toBeNull()
     expect(s.turn!.favoriteGuessId).toBeNull()
     // Nothing to grade: settled here, not left waiting for a verdict.
@@ -411,16 +523,8 @@ describe('end_drawing', () => {
     expect(s.turns).toHaveLength(1)
   })
 
-  it('refuses until the drawer has said what it is', () => {
-    // The grader has nothing to compare against without this.
-    const s = run(drawing(), guess('b', 'cat'))
-    expect(fails(s, { type: 'end_drawing', now: T0 + 500, playerId: 'a' })).toMatch(/drawing/)
-    const s2 = run(s, intent('a'))
-    expect(run(s2, { type: 'end_drawing', now: T0 + 500, playerId: 'a' }).phase).toBe('judging')
-  })
-
   it('rejects non-drawers', () => {
-    expect(fails(drawing(), { type: 'end_drawing', now: T0, playerId: 'b' })).toMatch(/drawer/)
+    expect(fails(drawing(), done('b'))).toMatch(/drawer/)
   })
 })
 
@@ -432,7 +536,7 @@ describe('timeout during drawing', () => {
     expect(r.state).toBe(s)
   })
 
-  it('ends drawing at the deadline even with no intent set', () => {
+  it('ends drawing at the deadline without the drawer', () => {
     const s0 = run(drawing(), guess('b', 'cat'))
     const s = run(s0, { type: 'timeout', now: s0.timerEndsAt! })
     expect(s.phase).toBe('judging')
@@ -445,14 +549,14 @@ describe('timeout during drawing', () => {
 // ---------------------------------------------------------------------------
 
 function judging(): GameState {
-  return run(drawing(), guess('b', 'cat', T0 + 100), guess('c', 'dog', T0 + 200), ...done('a'))
+  return run(drawing(), guess('b', 'cat', T0 + 100), guess('c', 'dog', T0 + 200), done('a'))
 }
 
 describe('judge', () => {
   it('awards the favorite and moves to reveal', () => {
     const s0 = judging()
     const [, cGuess] = guessIds(s0) as [GuessId, GuessId]
-    const s = run(s0, { type: 'judge', now: T0 + 600, playerId: 'a', favoriteGuessId: cGuess })
+    const s = run(s0, { type: 'judge', now: T1 + 600, playerId: 'a', favoriteGuessId: cGuess })
     expect(s.phase).toBe('reveal')
     expect(s.turn!.favoriteGuessId).toBe(cGuess)
     expect(s.players['c']!.score).toBe(CFG.favoritePoints)
@@ -460,7 +564,7 @@ describe('judge', () => {
     expect(s.turn!.correctGuessId).toBeNull()
     expect(s.turn!.grading).toBe('pending')
     expect(s.players['a']!.score).toBe(0)
-    expect(s.timerEndsAt).toBe(T0 + 600 + CFG.revealMs)
+    expect(s.timerEndsAt).toBe(T1 + 600 + CFG.revealMs)
     expect(s.turns).toHaveLength(1)
     expect(s.turns[0]).toBe(s.turn)
   })
@@ -469,7 +573,7 @@ describe('judge', () => {
     const s0 = judging()
     const [bGuess] = guessIds(s0) as [GuessId]
     // The old shape carried correctGuessId; it is no longer part of the event.
-    const s = run(s0, { type: 'judge', now: T0 + 600, playerId: 'a', favoriteGuessId: bGuess })
+    const s = run(s0, { type: 'judge', now: T1 + 600, playerId: 'a', favoriteGuessId: bGuess })
     expect(s.players['b']!.score).toBe(CFG.favoritePoints)
   })
 
@@ -496,7 +600,7 @@ describe('judge', () => {
 })
 
 describe('grade', () => {
-  const verdict = (correctGuessId: GuessId | null, ok = true, now = T0 + 550): GameEvent =>
+  const verdict = (correctGuessId: GuessId | null, ok = true, now = T1 + 550): GameEvent =>
     ({ type: 'grade', now, correctGuessId, ok })
 
   it('awards the correct guess and records the verdict', () => {
@@ -530,7 +634,7 @@ describe('grade', () => {
     const s0 = judging()
     const [bGuess] = guessIds(s0) as [GuessId]
     let s = run(s0, verdict(bGuess))
-    s = run(s, { type: 'judge', now: T0 + 600, playerId: 'a', favoriteGuessId: bGuess })
+    s = run(s, { type: 'judge', now: T1 + 600, playerId: 'a', favoriteGuessId: bGuess })
     expect(s.players['b']!.score).toBe(CFG.correctPoints + CFG.favoritePoints)
     expect(s.turn!.correctGuessId).toBe(bGuess)
     expect(s.turn!.favoriteGuessId).toBe(bGuess)
@@ -539,9 +643,9 @@ describe('grade', () => {
   it('still lands when it arrives after the reveal has started', () => {
     const s0 = judging()
     const [bGuess, cGuess] = guessIds(s0) as [GuessId, GuessId]
-    let s = run(s0, { type: 'judge', now: T0 + 600, playerId: 'a', favoriteGuessId: cGuess })
+    let s = run(s0, { type: 'judge', now: T1 + 600, playerId: 'a', favoriteGuessId: cGuess })
     expect(s.phase).toBe('reveal')
-    s = run(s, verdict(bGuess, true, T0 + 700))
+    s = run(s, verdict(bGuess, true, T1 + 700))
     expect(s.players['b']!.score).toBe(CFG.correctPoints)
     // The recorded turn and the live one must not drift apart.
     expect(s.turns.at(-1)!.correctGuessId).toBe(bGuess)
@@ -561,6 +665,7 @@ describe('grade', () => {
 
   it('is refused before there is anything to grade', () => {
     expect(fails(drawing(), verdict(null))).toMatch(/gradeable/)
+    expect(fails(prep(), verdict(null))).toMatch(/gradeable/)
     expect(fails(lobby(), verdict(null))).toMatch(/turn/)
   })
 
@@ -570,6 +675,54 @@ describe('grade', () => {
     expect(s.turns[0]!.grading).toBe('unavailable')
     // A new turn has begun; the skipped one is history and cannot be graded.
     expect(fails(s, verdict(null))).toMatch(/gradeable|already/)
+  })
+})
+
+describe('translate', () => {
+  const CAT = { en: 'cat', fr: 'chat', es: 'gato', zh: '猫' }
+  const DOG = { en: 'dog', fr: 'chien', es: 'perro', zh: '狗' }
+  const GIRAFFE = { en: 'a giraffe on a jet ski', fr: 'une girafe sur un jet-ski' }
+  const rendering = (guesses: Record<GuessId, typeof CAT>, now = T1 + 560): GameEvent =>
+    ({ type: 'translate', now, guesses, intent: GIRAFFE })
+
+  it('attaches every language to each guess, and to the note', () => {
+    const s0 = judging()
+    const [bGuess, cGuess] = guessIds(s0) as [GuessId, GuessId]
+    const s = run(s0, rendering({ [bGuess]: CAT, [cGuess]: DOG }))
+    expect(s.turn!.guesses.map((g) => g.translations)).toEqual([CAT, DOG])
+    expect(s.turn!.intentTranslations).toEqual(GIRAFFE)
+    // It says nothing about scoring or phase.
+    expect(s.phase).toBe('judging')
+    expect(s.turn!.grading).toBe('pending')
+  })
+
+  it('ignores ids that match no guess rather than refusing', () => {
+    // A guess can be withdrawn by its author leaving while the request is out.
+    const s0 = judging()
+    const [bGuess] = guessIds(s0) as [GuessId]
+    const s = run(s0, rendering({ [bGuess]: CAT, gone: DOG }))
+    expect(s.turn!.guesses.map((g) => g.translations)).toEqual([CAT, null])
+  })
+
+  it('keeps a note translation it already has when none is sent', () => {
+    const s0 = run(judging(), rendering({}))
+    const s = run(s0, { type: 'translate', now: T1 + 570, guesses: {}, intent: null })
+    expect(s.turn!.intentTranslations).toEqual(GIRAFFE)
+  })
+
+  it('still lands after the reveal has started, keeping the record in step', () => {
+    const s0 = judging()
+    const [bGuess, cGuess] = guessIds(s0) as [GuessId, GuessId]
+    let s = run(s0, { type: 'judge', now: T1 + 600, playerId: 'a', favoriteGuessId: cGuess })
+    s = run(s, rendering({ [bGuess]: CAT }, T1 + 700))
+    expect(s.turn!.guesses[0]!.translations).toEqual(CAT)
+    expect(s.turns.at(-1)).toBe(s.turn)
+  })
+
+  it('is refused before there is anything to translate', () => {
+    expect(fails(drawing(), rendering({}))).toMatch(/translatable/)
+    expect(fails(prep(), rendering({}))).toMatch(/translatable/)
+    expect(fails(lobby(), rendering({}))).toMatch(/turn/)
   })
 })
 
@@ -583,24 +736,32 @@ function reveal(): GameState {
   // A graded turn with a favourite picked: the state the reveal renders.
   return run(
     s0,
-    { type: 'grade', now: T0 + 550, correctGuessId: bGuess, ok: true },
-    { type: 'judge', now: T0 + 600, playerId: 'a', favoriteGuessId: cGuess },
+    { type: 'grade', now: T1 + 550, correctGuessId: bGuess, ok: true },
+    { type: 'judge', now: T1 + 600, playerId: 'a', favoriteGuessId: cGuess },
   )
+}
+
+/** Play a whole turn as fast as the rules allow: note, clock, guesses, finish. */
+function quickTurn(s: GameState, drawerId: PlayerId, at: number, ...guesses: GameEvent[]): GameState {
+  s = run(s, ...begin(drawerId, at), ...guesses)
+  return run(s, done(drawerId, at + CFG.minDrawingMs))
 }
 
 /** Play through all three turns of round 1 to reach round_end. */
 function roundEnd(): GameState {
   let s = reveal()
   // Turn 2: b draws
-  s = run(s, { type: 'advance', now: T0 + 700, playerId: 'a' })
+  s = run(s, { type: 'advance', now: T1 + 700, playerId: 'a' })
   expect(drawerOf(s)).toBe('b')
-  s = run(s, guess('a', 'x', T0 + 710), ...done('b', T0 + 720))
-  s = run(s, { type: 'judge', now: T0 + 730, playerId: 'b', favoriteGuessId: guessIds(s)[0]! })
+  const t2 = T1 + 710
+  s = quickTurn(s, 'b', t2, guess('a', 'x', t2 + 5))
+  s = run(s, { type: 'judge', now: t2 + CFG.minDrawingMs + 10, playerId: 'b', favoriteGuessId: guessIds(s)[0]! })
   // Turn 3: c draws
-  s = run(s, { type: 'advance', now: T0 + 740, playerId: 'a' })
+  const t3 = t2 + CFG.minDrawingMs + 20
+  s = run(s, { type: 'advance', now: t3, playerId: 'a' })
   expect(drawerOf(s)).toBe('c')
-  s = run(s, ...done('c', T0 + 750))
-  s = run(s, { type: 'advance', now: T0 + 760, playerId: 'a' })
+  s = quickTurn(s, 'c', t3 + 10)
+  s = run(s, { type: 'advance', now: t3 + 10 + CFG.minDrawingMs + 10, playerId: 'a' })
   expect(s.phase).toBe('round_end')
   return s
 }
@@ -611,21 +772,21 @@ describe('advance', () => {
     expect(fails(drawing(), { type: 'advance', now: T0, playerId: 'a' })).toMatch(/reveal/)
   })
 
-  it('starts the next drawer with a fresh turn and timer', () => {
-    const s = run(reveal(), { type: 'advance', now: T0 + 700, playerId: 'a' })
-    expect(s.phase).toBe('drawing')
+  it('starts the next drawer with a fresh turn, deciding what to draw', () => {
+    const s = run(reveal(), { type: 'advance', now: T1 + 700, playerId: 'a' })
+    expect(s.phase).toBe('prep')
     expect(s.drawerIdx).toBe(1)
     expect(s.turn!.drawerId).toBe('b')
     expect(s.turn!.guesses).toEqual([])
     expect(s.turn!.intent).toBeNull()
-    expect(s.timerEndsAt).toBe(T0 + 700 + CFG.drawingMs)
+    expect(s.timerEndsAt).toBe(T1 + 700 + CFG.prepMs)
     expect(s.turns).toHaveLength(1)
   })
 
   it('reveal timeout does the same as advance', () => {
     const s0 = reveal()
     const s = run(s0, { type: 'timeout', now: s0.timerEndsAt! })
-    expect(s.phase).toBe('drawing')
+    expect(s.phase).toBe('prep')
     expect(s.turn!.drawerId).toBe('b')
   })
 
@@ -646,20 +807,21 @@ describe('advance', () => {
   })
 
   it('includes a late-ready player at the end of the round', () => {
-    let s = run(reveal(), join('z', T0 + 650), ready('z', true, T0 + 651))
-    s = run(s, { type: 'advance', now: T0 + 700, playerId: 'a' }) // b
-    s = run(s, ...done('b', T0 + 710))
-    s = run(s, { type: 'advance', now: T0 + 720, playerId: 'a' }) // c
-    s = run(s, ...done('c', T0 + 730))
-    s = run(s, { type: 'advance', now: T0 + 740, playerId: 'a' }) // z
-    expect(s.phase).toBe('drawing')
+    let s = run(reveal(), join('z', T1 + 650), ready('z', true, T1 + 651))
+    const step = CFG.minDrawingMs + 100
+    s = run(s, { type: 'advance', now: T1 + 700, playerId: 'a' }) // b
+    s = quickTurn(s, 'b', T1 + 710)
+    s = run(s, { type: 'advance', now: T1 + 710 + step, playerId: 'a' }) // c
+    s = quickTurn(s, 'c', T1 + 720 + step)
+    s = run(s, { type: 'advance', now: T1 + 720 + 2 * step, playerId: 'a' }) // z
+    expect(s.phase).toBe('prep')
     expect(drawerOf(s)).toBe('z')
   })
 
   it('skips a disconnected next drawer and records a skipped turn', () => {
-    let s = run(reveal(), { type: 'disconnect', now: T0 + 650, playerId: 'b' })
-    s = run(s, { type: 'advance', now: T0 + 700, playerId: 'a' })
-    expect(s.phase).toBe('drawing')
+    let s = run(reveal(), { type: 'disconnect', now: T1 + 650, playerId: 'b' })
+    s = run(s, { type: 'advance', now: T1 + 700, playerId: 'a' })
+    expect(s.phase).toBe('prep')
     expect(drawerOf(s)).toBe('c')
     expect(s.turns).toHaveLength(2)
     expect(s.turns[1]).toMatchObject({ drawerId: 'b', skipped: true, guesses: [] })
@@ -668,10 +830,10 @@ describe('advance', () => {
   it('goes to round_end when every remaining drawer is disconnected', () => {
     let s = run(
       reveal(),
-      { type: 'disconnect', now: T0 + 650, playerId: 'b' },
-      { type: 'disconnect', now: T0 + 651, playerId: 'c' },
+      { type: 'disconnect', now: T1 + 650, playerId: 'b' },
+      { type: 'disconnect', now: T1 + 651, playerId: 'c' },
     )
-    s = run(s, { type: 'advance', now: T0 + 700, playerId: 'a' })
+    s = run(s, { type: 'advance', now: T1 + 700, playerId: 'a' })
     expect(s.phase).toBe('round_end')
     expect(s.turns.map((t) => [t.drawerId, t.skipped])).toEqual([
       ['a', false],
@@ -694,14 +856,14 @@ describe('next_round', () => {
   it('starts round 2 with all ready, connected players and keeps scores', () => {
     const s0 = run(roundEnd(), ready('d', true, T0 + 900))
     const s = run(s0, { type: 'next_round', now: T0 + 1000, playerId: 'a', seed: 7 })
-    expect(s.phase).toBe('drawing')
+    expect(s.phase).toBe('prep')
     expect(s.round).toBe(2)
     expect(s.drawerIdx).toBe(0)
     expect([...s.drawOrder].sort()).toEqual(['a', 'b', 'c', 'd'])
     expect(s.turn!.round).toBe(2)
     expect(s.turns).toHaveLength(3)
     expect(s.players['b']!.score).toBe(CFG.correctPoints)
-    expect(s.timerEndsAt).toBe(T0 + 1000 + CFG.drawingMs)
+    expect(s.timerEndsAt).toBe(T0 + 1000 + CFG.prepMs)
   })
 
   it('excludes disconnected players and enforces minPlayers', () => {
@@ -775,6 +937,16 @@ describe('disconnect / reconnect', () => {
     expect(s.graceEndsAt).toBe(T0 + 100 + CFG.graceMs)
   })
 
+  it('starts a grace timer when the drawer disconnects while deciding what to draw', () => {
+    const s0 = run(prep(), { type: 'disconnect', now: T0 + 100, playerId: 'a' })
+    expect(s0.phase).toBe('prep')
+    expect(s0.graceEndsAt).toBe(T0 + 100 + CFG.graceMs)
+    const s = run(s0, { type: 'timeout', now: s0.graceEndsAt! })
+    expect(s.turns[0]).toMatchObject({ drawerId: 'a', skipped: true })
+    expect(drawerOf(s)).toBe('b')
+    expect(s.phase).toBe('prep')
+  })
+
   it('does not start a grace timer for a guesser', () => {
     const s = run(drawing(), { type: 'disconnect', now: T0 + 100, playerId: 'b' })
     expect(s.graceEndsAt).toBeNull()
@@ -792,7 +964,7 @@ describe('disconnect / reconnect', () => {
   it('skips the turn when grace expires with the drawer still gone', () => {
     const s0 = run(drawing(), guess('b', 'cat'), { type: 'disconnect', now: T0 + 100, playerId: 'a' })
     const s = run(s0, { type: 'timeout', now: s0.graceEndsAt! })
-    expect(s.phase).toBe('drawing')
+    expect(s.phase).toBe('prep')
     expect(drawerOf(s)).toBe('b')
     expect(s.turns).toHaveLength(1)
     expect(s.turns[0]).toMatchObject({ drawerId: 'a', skipped: true })
@@ -825,7 +997,9 @@ describe('disconnect / reconnect', () => {
   it('a disconnected drawer whose turn is skipped can still guess after reconnecting', () => {
     const s0 = run(drawing(), { type: 'disconnect', now: T0 + 100, playerId: 'a' })
     let s = run(s0, { type: 'timeout', now: s0.graceEndsAt! })
-    s = run(s, { type: 'reconnect', now: s0.graceEndsAt! + 1, playerId: 'a' }, guess('a', 'back', s0.graceEndsAt! + 2))
+    const back = s0.graceEndsAt! + 1
+    // b is now deciding what to draw; once their clock runs, a may guess.
+    s = run(s, { type: 'reconnect', now: back, playerId: 'a' }, ...begin('b', back + 1), guess('a', 'back', back + 2))
     expect(s.turn!.guesses[0]!.playerId).toBe('a')
   })
 })
@@ -849,22 +1023,26 @@ describe('leave', () => {
   })
 
   it('removes an already-drawn player and keeps drawerIdx pointing at the same drawer', () => {
-    const s0 = run(reveal(), { type: 'advance', now: T0 + 700, playerId: 'a' })
+    const s0 = run(reveal(), { type: 'advance', now: T1 + 700, playerId: 'a' })
     expect(drawerOf(s0)).toBe('b')
-    const s = run(s0, { type: 'leave', now: T0 + 710, playerId: 'a' })
+    const s = run(s0, { type: 'leave', now: T1 + 710, playerId: 'a' })
     expect(s.drawOrder).toEqual(['b', 'c'])
     expect(s.drawerIdx).toBe(0)
     expect(drawerOf(s)).toBe('b')
-    expect(s.phase).toBe('drawing')
+    expect(s.phase).toBe('prep')
   })
 
   it('skips the turn immediately when the current drawer leaves', () => {
     const s = run(drawing(), guess('b', 'cat'), { type: 'leave', now: T0 + 100, playerId: 'a' })
     expect(s.players['a']).toBeUndefined()
     expect(s.drawOrder).toEqual(['b', 'c'])
-    expect(s.phase).toBe('drawing')
+    expect(s.phase).toBe('prep')
     expect(drawerOf(s)).toBe('b')
     expect(s.turns[0]).toMatchObject({ drawerId: 'a', skipped: true })
+    // The same while they were still deciding what to draw.
+    const p = run(prep(), { type: 'leave', now: T0 + 100, playerId: 'a' })
+    expect(p.turns[0]).toMatchObject({ drawerId: 'a', skipped: true })
+    expect(drawerOf(p)).toBe('b')
   })
 
   it('drops the leaver’s guess from the live turn', () => {
@@ -873,11 +1051,11 @@ describe('leave', () => {
   })
 
   it('goes to round_end when the last drawer of the round leaves mid-turn', () => {
-    let s = run(reveal(), { type: 'advance', now: T0 + 700, playerId: 'a' })
-    s = run(s, ...done('b', T0 + 710))
-    s = run(s, { type: 'advance', now: T0 + 720, playerId: 'a' })
+    let s = run(reveal(), { type: 'advance', now: T1 + 700, playerId: 'a' })
+    s = quickTurn(s, 'b', T1 + 710)
+    s = run(s, { type: 'advance', now: T1 + 720 + CFG.minDrawingMs, playerId: 'a' })
     expect(drawerOf(s)).toBe('c')
-    s = run(s, { type: 'leave', now: T0 + 730, playerId: 'c' })
+    s = run(s, { type: 'leave', now: T1 + 730 + CFG.minDrawingMs, playerId: 'c' })
     expect(s.phase).toBe('round_end')
   })
 
@@ -898,6 +1076,8 @@ describe('nextAlarmAt', () => {
   })
 
   it('is the phase deadline in timed phases', () => {
+    const p = prep()
+    expect(nextAlarmAt(p)).toBe(p.timerEndsAt)
     const d = drawing()
     expect(nextAlarmAt(d)).toBe(d.timerEndsAt)
     const j = judging()
@@ -929,17 +1109,45 @@ describe('project', () => {
     expect(forSpectator.turn!.guesses.map((g) => g.playerId)).toEqual([null, null])
   })
 
+  it('tells everyone who has answered, in an order that gives nothing away', () => {
+    // c answered first, then b. The guess list keeps that order and hides
+    // authors, so the answered list must not be in the same order or the
+    // two could be lined up.
+    const s = run(drawing(), guess('c', 'dog', T0 + 100), guess('b', 'cat', T0 + 200))
+    expect(project(s, 'a').turn!.answered).toEqual(['b', 'c'])
+    expect(project(s, 'b').turn!.answered).toEqual(['b', 'c'])
+    expect(project(s, null).turn!.answered).toEqual(['b', 'c'])
+    expect(project(drawing(), 'a').turn!.answered).toEqual([])
+  })
+
   it('hides intent from everyone but the drawer before reveal', () => {
-    const s = run(drawing(), { type: 'set_intent', now: T0, playerId: 'a', text: 'secret' })
+    const s = run(prep(), { type: 'set_intent', now: T0, playerId: 'a', text: 'secret' })
     expect(project(s, 'a').turn!.intent).toBe('secret')
     expect(project(s, 'b').turn!.intent).toBeNull()
     expect(project(s, null).turn!.intent).toBeNull()
   })
 
+  it('hides the note’s translations along with the note', () => {
+    const s0 = judging()
+    const s = run(s0, { type: 'translate', now: T1 + 560, guesses: {}, intent: { fr: 'secret' } })
+    expect(project(s, 'a').turn!.intentTranslations).toEqual({ fr: 'secret' })
+    expect(project(s, 'b').turn!.intentTranslations).toBeNull()
+    const revealed = run(s, { type: 'judge', now: T1 + 600, playerId: 'a', favoriteGuessId: guessIds(s)[0]! })
+    expect(project(revealed, 'b').turn!.intentTranslations).toEqual({ fr: 'secret' })
+  })
+
+  it('passes guess translations to everyone: the text was never hidden', () => {
+    const s0 = judging()
+    const [bGuess] = guessIds(s0) as [GuessId]
+    const s = run(s0, { type: 'translate', now: T1 + 560, guesses: { [bGuess]: { fr: 'chat' } }, intent: null })
+    expect(project(s, 'a').turn!.guesses[0]!.translations).toEqual({ fr: 'chat' })
+    expect(project(s, 'c').turn!.guesses[0]!.translations).toEqual({ fr: 'chat' })
+  })
+
   it('reveals everything from the reveal phase on', () => {
     const s = run(judging(), {
       type: 'judge',
-      now: T0 + 600,
+      now: T1 + 600,
       playerId: 'a',
       favoriteGuessId: guessIds(judging())[0]!,
     })
@@ -948,7 +1156,7 @@ describe('project', () => {
   })
 
   it('also reveals completed turns in history', () => {
-    const s = run(reveal(), { type: 'advance', now: T0 + 700, playerId: 'a' })
+    const s = run(reveal(), { type: 'advance', now: T1 + 700, playerId: 'a' })
     // Turn 1 is in history; turn 2 is live with no guesses yet.
     const p = project(s, 'c')
     expect(p.turns[0]!.guesses.map((g) => g.playerId)).toEqual(['b', 'c'])
@@ -977,7 +1185,8 @@ describe('immutability', () => {
   it('never mutates the input state', () => {
     const s = drawing()
     const before = JSON.stringify(s)
-    run(s, guess('b', 'cat'), { type: 'set_intent', now: T0, playerId: 'a', text: 'x' })
+    run(s, guess('b', 'cat'))
+    apply(prep(), { type: 'set_intent', now: T0, playerId: 'a', text: 'x' })
     apply(s, { type: 'disconnect', now: T0, playerId: 'a' })
     apply(s, { type: 'leave', now: T0, playerId: 'a' })
     expect(JSON.stringify(s)).toBe(before)
@@ -1001,6 +1210,7 @@ describe('immutability', () => {
 describe('error codes', () => {
   it('tags every kind of refusal', () => {
     const lob = lobby()
+    const pre = prep()
     const dra = drawing()
     const jud = judging()
     const rev = reveal()
@@ -1015,12 +1225,16 @@ describe('error codes', () => {
       [dra, ready('d', false), 'unready_outside_lobby'],
       [dra, { type: 'start_game', now: T0, playerId: 'a', seed: 1 }, 'not_in_lobby'],
       [lob, { type: 'start_game', now: T0, playerId: 'b', seed: 1 }, 'not_organizer'],
-      [dra, intent('b'), 'not_drawer'],
-      [jud, intent('a'), 'not_drawing'],
+      [pre, intent('b'), 'not_drawer'],
+      [dra, intent('a'), 'not_prep'],
+      [pre, { type: 'start_drawing', now: T0, playerId: 'a' }, 'intent_required'],
+      [dra, { type: 'start_drawing', now: T0, playerId: 'a' }, 'not_prep'],
+      [pre, guess('b', 'early'), 'not_drawing'],
       [dra, guess('a', 'me'), 'drawer_cannot_guess'],
       [dra, guess('d', 'late'), 'not_ready'],
       [dra, guess('b', '   '), 'invalid_guess'],
-      [dra, { type: 'end_drawing', now: T0, playerId: 'a' }, 'intent_required'],
+      [dra, done('a', T0 + 500), 'too_early'],
+      [pre, done('a'), 'not_drawing'],
       [dra, { type: 'judge', now: T0, playerId: 'a', favoriteGuessId: 'g1' }, 'not_judging'],
       [jud, { type: 'judge', now: T0, playerId: 'a', favoriteGuessId: 'nope' }, 'unknown_guess'],
       [lob, { type: 'grade', now: T0, correctGuessId: null, ok: true }, 'nothing_to_grade'],

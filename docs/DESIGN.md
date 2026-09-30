@@ -47,7 +47,9 @@ loads the client.
 - uses the DO **alarm** for every timer (drawing, judging, reveal,
   disconnect grace);
 - projects the state per player before sending (guessers never see
-  authors during judging; only the drawer sees their own intent).
+  authors during judging; only the drawer sees their own intent);
+- asks Gemini, once per turn, which guess was right and how every guess
+  reads in each language the client speaks.
 
 Everything the DO does is thin glue. The rules live in `src/game/`.
 
@@ -56,7 +58,8 @@ Everything the DO does is thin glue. The rules live in `src/game/`.
 ```
 src/game/         pure state machine — zero I/O, zero Cloudflare imports
 src/room/         RoomDO (sockets, storage, alarm, stroke relay) + wire protocol
-                  grader.ts — the Gemini call; pure fetch + parsing, no DO
+                  grader.ts, translator.ts — the two Gemini calls, over gemini.ts;
+                  pure fetch + parsing, no DO
 src/worker.ts     router + static assets
 web/              PWA client: Svelte 5 + Vite
 scripts/          e2e smoke test, PWA icon generation
@@ -72,9 +75,14 @@ alarms, from socket lifecycle) and applies them.
 
 ```
             start_game (organizer, ≥3 ready)
-  LOBBY ───────────────────────────────────► DRAWING
+  LOBBY ───────────────────────────────────► PREP ── timeout (60s) ──► turn skipped
                                                 │
-                     end_drawing (drawer) / timeout (90s)
+                     start_drawing (drawer, note written)
+                                                │
+                                                ▼
+                                             DRAWING
+                                                │
+                     end_drawing (drawer, ≥30s in) / timeout (90s)
                                                 │
                                                 ▼
                                              JUDGING ─── no guesses ──┐
@@ -89,17 +97,22 @@ alarms, from socket lifecycle) and applies them.
                      ┌──────────────────────────┴───────────────┐
                      │ more drawers this round                  │ everyone has drawn
                      ▼                                          ▼
-                  DRAWING                                   ROUND_END
+                    PREP                                    ROUND_END
                                                                 │
                                         next_round (organizer)  │  end_game (organizer)
                                                 ▼               ▼
-                                             DRAWING          ENDED
+                                              PREP            ENDED
 ```
+
+A turn opens in `prep`: the drawer writes their note (what they will
+draw) and taps Start, and only then does the drawing clock run. The note
+is what every guess is graded against, so it is settled before anyone has
+seen a line, and it cannot change once the clock is running.
 
 ### State shape
 
 ```ts
-type Phase = 'lobby' | 'drawing' | 'judging' | 'reveal' | 'round_end' | 'ended'
+type Phase = 'lobby' | 'prep' | 'drawing' | 'judging' | 'reveal' | 'round_end' | 'ended'
 
 interface GameState {
   code: string
@@ -128,16 +141,26 @@ interface Player {
 interface Turn {
   drawerId: PlayerId
   intent: string | null             // drawer's private note; public at reveal
+  intentTranslations: Translations | null
   guesses: Guess[]                  // in submission order
-  correctGuessId: GuessId | null
   correctGuessId: GuessId | null   // graded, not chosen by the drawer
   grading: 'pending' | 'done' | 'unavailable'
   favoriteGuessId: GuessId | null  // the drawer's pick; may be the same guess
   skipped: boolean                  // drawer left / disconnected past grace
 }
 
-interface Guess { id: GuessId; playerId: PlayerId; text: string; submittedAt: number }
+interface Guess {
+  id: GuessId; playerId: PlayerId; text: string; submittedAt: number
+  translations: Translations | null // text in every Lang, once translated
+}
+
+type Lang = 'en' | 'fr' | 'es' | 'zh'
+type Translations = Partial<Record<Lang, string>>
 ```
+
+`Lang` lives in `src/game/types.ts` because the state carries text keyed
+by it; the client's dictionary and the translator both import it from
+there.
 
 ### Events
 
@@ -146,20 +169,22 @@ All events carry `now` (ms epoch) so the reducer never calls `Date.now()`.
 | Event | From | Allowed in | Effect |
 |---|---|---|---|
 | `join {playerId, name, avatar}` | client | any but `ended` | Add player (not ready). First player becomes organizer. |
-| `set_ready {playerId, ready}` | client | any but `ended` | Toggle in the lobby. Mid-game only `ready: true` is accepted, and during `drawing`/`judging`/`reveal` it appends the player to `drawOrder`. |
-| `start_game {playerId, seed}` | organizer | `lobby` | Requires ≥3 ready players. Shuffles ready players into `drawOrder` (seeded), starts round 1, turn 1. |
-| `set_intent {playerId, text}` | drawer | `drawing` | What's being drawn. Private until reveal, and **required** before `end_drawing` is accepted. |
-| `submit_guess {playerId, text}` | guesser | `drawing` | Upsert this player's guess. Editing moves it to the end of the order. |
-| `end_drawing {playerId}` | drawer | `drawing` | Early finish → `judging` (or straight to `reveal` if no guesses). |
+| `set_ready {playerId, ready}` | client | any but `ended` | Toggle in the lobby. Mid-game only `ready: true` is accepted, and during `prep`/`drawing`/`judging`/`reveal` it appends the player to `drawOrder`. |
+| `start_game {playerId, seed}` | organizer | `lobby` | Requires ≥3 ready players. Shuffles ready players into `drawOrder` (seeded), starts round 1, turn 1 in `prep`. |
+| `set_intent {playerId, text}` | drawer | `prep` | What's being drawn. Private until reveal, and **required** before `start_drawing` is accepted. Fixed once the clock runs. |
+| `start_drawing {playerId}` | drawer | `prep` | Note written → `drawing`, with the 90 s clock. |
+| `submit_guess {playerId, text}` | guesser | `drawing` | Upsert this player's guess. Editing moves it to the end of the order and drops any translation of the old text. |
+| `end_drawing {playerId}` | drawer | `drawing` | Early finish → `judging` (or straight to `reveal` if no guesses). Refused (`too_early`) until `minDrawingMs` has run; `earliestEndAt(state)` says when, and the client shares it. |
 | `judge {playerId, favoriteGuessId}` | drawer | `judging` | Award the favourite → `reveal`. |
 | `grade {correctGuessId, ok}` | DO (grader) | `judging`, `reveal` | Record the correctness verdict and award it. Accepted once per turn, on either side of the drawer's pick. |
+| `translate {guesses, intent}` | DO (translator) | `judging`, `reveal` | Attach each guess's, and the note's, rendering in every language. Ids that match no guess are ignored. |
 | `advance {playerId}` | organizer | `reveal` | Skip the reveal timer. |
 | `next_round {playerId, seed}` | organizer | `round_end` | New round with all connected players, reshuffled. |
 | `end_game {playerId}` | organizer | `round_end` | → `ended`. |
-| `disconnect {playerId}` | DO | any | Mark disconnected. Drawer in `drawing`/`judging` starts grace timer. Organizer disconnect promotes the longest-connected player. |
+| `disconnect {playerId}` | DO | any | Mark disconnected. Drawer in `prep`/`drawing`/`judging` starts grace timer. Organizer disconnect promotes the longest-connected player. |
 | `reconnect {playerId}` | DO | any | Mark connected; clear grace if drawer. |
 | `leave {playerId}` | client/DO | any | Remove player. Current drawer leaving skips the turn. |
-| `timeout` | DO (alarm) | timed phases | Fires whichever deadline has passed (the earlier one first if both have): drawing → judging; judging → reveal with no awards; reveal → next turn; grace → skip turn. Before any deadline it is a no-op. |
+| `timeout` | DO (alarm) | timed phases | Fires whichever deadline has passed (the earlier one first if both have): prep → turn skipped; drawing → judging; judging → reveal with no awards; reveal → next turn; grace → skip turn. Before any deadline it is a no-op. |
 
 `nextAlarmAt(state)` returns the earliest pending deadline (or `null`) so
 the DO can call `storage.setAlarm()` after every change.
@@ -235,21 +260,58 @@ the free tier's request quota is counted per model.
 Note that the room tests assert the no-key path, so a `.dev.vars`
 carrying `GEMINI_API_KEY` makes them call Gemini for real and fail.
 
+## Translation
+
+Every player reads every guess, and the drawer's note, in their own
+language. The rendering is done once per turn by the same model, from the
+DO, and reaches the reducer as a `translate` event — the same shape as
+grading, for the same reasons.
+
+- On entering `judging`, `RoomDO.maybeTranslate()` sends the turn's
+  guesses and note to Gemini as one numbered list, alongside the grading
+  call, and asks for each item in every `Lang`. Judging is the first
+  moment anyone but the author sees a guess, and the guesses are final by
+  then, so one call covers the turn. A turn with no guesses skips judging,
+  so the call also starts on entering `reveal`; the per-turn guard holds
+  across the two. A guess edited during drawing simply drops whatever it
+  carried.
+- The reply is applied only if the live turn is still the one that was
+  sent, and is accepted during `reveal` too; the reducer keeps `turn` and
+  `turns[-1]` in step.
+- Nobody's chosen language is sent: the model renders into all four, and
+  each client picks its own out (`t.read` in `web/src/lib/i18n.svelte.ts`).
+  A rendering identical to the original is not shown twice; one that
+  differs is shown with the original beneath, since a translation is a
+  reading aid and the drawer is still judging what was actually written.
+- Player text is data, as in the grader: a numbered list out, numbers
+  back, out-of-range or non-string entries discarded. The prompt asks for
+  a copy, not a rewrite, when an item is already in a language.
+- Every failure — no key, non-200, timeout, unreadable body — leaves the
+  turn untranslated and everyone reads the guesses as typed, which is how
+  the game played before translation existed. Local dev and the test
+  suites run that way.
+
+`src/room/gemini.ts` holds what the two calls share: the endpoint, the
+default model, the request, and the envelope parsing (`steps` first, then
+`output_text`, then the older `candidates` shape).
+
 ### Turn advancement
 
 After `reveal`, `drawerIdx + 1`. If it equals `drawOrder.length`, phase →
-`round_end`. Otherwise start a new turn with the next drawer. If the next
-drawer is disconnected, skip them (recorded as a skipped turn) and try the
-following one; if nobody in the remaining order is connected, → `round_end`.
+`round_end`. Otherwise start a new turn with the next drawer, in `prep`.
+If the next drawer is disconnected, skip them (recorded as a skipped
+turn) and try the following one; if nobody in the remaining order is
+connected, → `round_end`. A drawer who is present but never writes a note
+within `prepMs` is skipped the same way.
 
 ### Late joiners
 
 A `join` mid-game adds the player but does nothing else: they are in the
 room but not in the game until they hit **Ready**. `set_ready` during
-`drawing`/`judging`/`reveal` appends them to `drawOrder` so they draw this
-round, and from then on they can `submit_guess`. `set_ready` during
-`round_end` just marks them; they're included when the organizer starts
-the next round. Only ready players may guess.
+`prep`/`drawing`/`judging`/`reveal` appends them to `drawOrder` so they
+draw this round, and from then on they can `submit_guess`. `set_ready`
+during `round_end` just marks them; they're included when the organizer
+starts the next round. Only ready players may guess.
 
 ### Draw order
 
@@ -292,8 +354,15 @@ picture regardless of screen size.
 | `GET /api/rooms/:code/turns/:i/strokes` | Stroke log of turn `i` for the gallery. |
 
 Config overrides at creation are clamped to sane ranges (each timer 1 ms
-to 1 h, etc.); the same fields the game uses. `room.idleTtlMs` and
-`room.endedTtlMs` control garbage collection.
+to 1 h, the minimum drawing time to at most the drawing timer, etc.); the
+same fields the game uses. `room.idleTtlMs` and `room.endedTtlMs` control
+garbage collection.
+
+Storage outlives a deploy, so `load()` passes a stored game through
+`upgradeStoredGame`: config fields the room never had go through the same
+sanitiser as a new room's, and turns and guesses gain the fields a fresh
+one has. Without that, a room mid-game when new config lands would
+compute its next deadline as `now + undefined`.
 
 The worker forwards to the DO with the room code baked into the DO name
 (`idFromName(code)`); the DO learns its code from the `/create` body.
@@ -307,6 +376,7 @@ Types live in `src/room/protocol.ts` and are shared with the client.
 stamps both; anything the client sends for those is ignored), plus:
 
 - `join {name, avatar}` — first message on a fresh socket.
+- `start_drawing` — the drawer's note is written; start the clock.
 - `stroke {strokes: Stroke[]}` — batched; accepted only from the current
   drawer during `drawing`, silently dropped otherwise, `error` if malformed.
 - `leave` — remove the player; the server closes the socket with 4000.
@@ -334,10 +404,13 @@ are rejected. Close codes: 4000 left, 4001 unauthorized, 4002 replaced
 by a newer socket for the same player, 4004 room gone.
 
 `project(state, viewerId)` strips: other players' guess authorship during
-`drawing`/`judging`; `intent` unless viewer is the drawer or phase is
-`reveal`+; and `correctGuessId` from **everyone** before the reveal, the
-drawer included — seeing the verdict would colour their favourite pick
-and spoil the moment.
+`drawing`/`judging`; `intent` and its translations unless viewer is the
+drawer or phase is `reveal`+; and `correctGuessId` from **everyone**
+before the reveal, the drawer included — seeing the verdict would colour
+their favourite pick and spoil the moment. It adds `answered`: the ids of
+everyone with a guess in, so the drawer can tell when to stop. That list
+is sorted by id rather than by submission, because the guess list *is* in
+submission order and the two side by side would say who wrote what.
 
 ## Reconnection
 
@@ -370,11 +443,13 @@ socket attachment so it survives hibernation.
 
 | Timer | Duration | Set on |
 |---|---|---|
-| Drawing | 90 s | entering `drawing` |
+| Prep | 60 s | entering `prep`; expiry skips the turn |
+| Drawing | 90 s | `start_drawing` |
+| Minimum drawing | 30 s | not an alarm: `end_drawing` is refused until it has run, and the client counts it down. Clamped to the drawing timer, so it can never outlast the clock |
 | Judging | 60 s | entering `judging` |
 | Reveal | 8 s | entering `reveal` |
-| Drawer-disconnect grace | 15 s | drawer `disconnect` during `drawing`/`judging` |
-| Grading budget | 10 s | the Gemini request's own timeout, not an alarm |
+| Drawer-disconnect grace | 15 s | drawer `disconnect` during `prep`/`drawing`/`judging` |
+| Grading and translation budget | 10 s | each Gemini request's own timeout, not an alarm |
 
 All durations are constants in `src/game/config.ts`. They can be
 overridden per room at creation (`POST /api/rooms` body); the room tests
@@ -388,7 +463,7 @@ Four vitest projects, each in the runtime that matches what it tests:
 |---|---|---|
 | `game` | `src/game/**/*.test.ts` | node |
 | `room` | `src/room/**/*.test.ts` minus the grader | workerd (Miniflare) |
-| `grader` | `src/room/grader.test.ts` | node |
+| `grader` | `src/room/grader.test.ts`, `src/room/translator.test.ts` | node |
 | `web` | `web/src/**/*.test.ts` | happy-dom |
 
 `src/game/` is tested with vitest, no mocks: build a state, apply events,
@@ -401,11 +476,11 @@ DO alarms with `runDurableObjectAlarm`. Miniflare also runs real alarms,
 so tests that set millisecond TTLs assert on the outcome rather than on
 whether the manual alarm call did the work.
 
-`grader.ts` is pure fetch plus parsing, so it runs in node rather than
-workerd — a separate project purely so it does not pay for a DO harness
-it never touches. Its tests assert the prompt's wording, the
-numbered-list contract, and that every failure mode resolves to
-`ok: false`.
+`grader.ts` and `translator.ts` are pure fetch plus parsing, so they run
+in node rather than workerd — a separate project purely so they do not
+pay for a DO harness they never touch. Their tests assert each prompt's
+wording, the numbered-list contract, and that every failure mode resolves
+to `ok: false` (grading) or `null` (translation).
 
 `web/` runs in happy-dom. The store is driven through a `FakeWS` stand-in
 socket (reconnect backoff, every close code, the `visibilitychange`
@@ -413,10 +488,11 @@ wake-up); the repaint invariant is checked against a recording fake 2D
 context. That logic lives in `lib/paint.ts` rather than in
 `Canvas.svelte` precisely so it can be tested without a browser.
 
-`scripts/e2e.mjs` is the layer none of the above reaches: eight scenarios in
+`scripts/e2e.mjs` is the layer none of the above reaches: nine scenarios in
 real browsers against `wrangler dev`, three browser contexts standing in
 for three phones. It has caught bugs that unit tests and typechecking did
 not — run it after changing anything in `web/` or the wire protocol.
+`ELEPHANT_ONLY=<substring>` runs just the matching scenarios.
 
 `npm run coverage` deliberately reports only `src/game/**` and
 `web/src/lib/**/*.ts`. The v8 provider cannot instrument code running
@@ -469,10 +545,12 @@ Each player picks their own; nobody else's screen changes.
 - `<html lang>` follows the choice, as `zh-Hans` for Chinese: the script
   subtag is what picks the right Han glyphs. The font stack names the
   system CJK faces after the rounded Latin ones, which do not carry Han.
-- **Nothing players type is translated or normalised into one language.**
-  Names, guesses and the drawer's note travel and display exactly as
-  typed — reading a guess you only half understand is part of the game.
-  The reducer composes them to NFC and measures lengths in code points,
+- **Every guess is read in the reader's language.** What players type is
+  stored exactly as typed; once a turn's guesses are final the server
+  renders them, and the drawer's note, into every language it speaks (see
+  *Translation*), and each client shows its player's own with the original
+  beneath when it differs. Names are never translated. The reducer
+  composes player text to NFC and measures lengths in code points,
   so a decomposed "é" costs one character rather than two and a clipped
   note can never end in half a surrogate pair. It also drops characters
   that are invisible but not joiners — bidi overrides, which reorder text
@@ -542,7 +620,8 @@ against.
 | Moment | What happens |
 |---|---|
 | Ready toggle | Button squashes, flips colour with a pop, avatar bounces in the roster. Organizer's roster ripples as each badge lands. |
-| Start game | Lobby cards scatter off-screen, the canvas slides up, the drawer's avatar stamps onto it, the 90-s ring snaps full and starts draining. |
+| Start game | Lobby cards scatter off-screen; the drawer gets a note field and a Start button, everyone else the drawer's avatar rocking while they think. On Start the canvas slides up and the 90-s ring snaps full and starts draining. |
+| Someone answers | Their chip under the canvas lights up with a pop and a tick stamps on. The drawer watches the row fill to know when to stop; "Done" counts down its first 30 s. |
 | Timer | Ring drains with a taut easing; last 10 s it pulses and the whole timer shakes harder each second. |
 | Guess submitted | Bubble thunks into the drawer's list with a squash; the guesser's own bubble sticks to their screen with a wiggle. Editing a guess slides it to the end. |
 | End of drawing | Canvas shrinks to a card, answers cascade in one by one (staggered, anonymous). The drawer taps one **favourite** (gold burst, confetti) while correctness is graded behind the scenes. |

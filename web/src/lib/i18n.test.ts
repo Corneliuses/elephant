@@ -140,7 +140,7 @@ describe('error wording', () => {
   })
 
   it('has its own wording for what a player can really provoke', () => {
-    for (const code of ['invalid_name', 'invalid_guess', 'intent_required', 'game_ended', 'unauthorized'] as const) {
+    for (const code of ['invalid_name', 'invalid_guess', 'intent_required', 'too_early', 'game_ended', 'unauthorized'] as const) {
       expect(t.error(code, 3)).not.toBe(t.s.errGeneric)
     }
   })
@@ -150,5 +150,28 @@ describe('error wording', () => {
     for (const code of ['invalid_name', 'not_organizer', 'unauthorized', 'need_more_players'] as const) {
       expect(t.error(code, 3)).not.toMatch(/[A-Za-z]{3}/)
     }
+  })
+})
+
+describe('reading translated text', () => {
+  const chat = { en: 'a cat', fr: 'un chat', es: 'un gato', zh: '一只猫' }
+
+  it('shows the player’s own language, with the original beneath', () => {
+    t.set('fr')
+    expect(t.read('a cat', chat)).toEqual({ text: 'un chat', original: 'a cat' })
+    t.set('zh')
+    expect(t.read('a cat', chat)).toEqual({ text: '一只猫', original: 'a cat' })
+  })
+
+  it('shows the text as typed when it is already in that language', () => {
+    // No point printing "a cat" twice.
+    expect(t.read('a cat', chat)).toEqual({ text: 'a cat', original: null })
+  })
+
+  it('falls back to the text as typed when there is no rendering', () => {
+    t.set('fr')
+    expect(t.read('a cat', null)).toEqual({ text: 'a cat', original: null })
+    expect(t.read('a cat', undefined)).toEqual({ text: 'a cat', original: null })
+    expect(t.read('a cat', { es: 'un gato' })).toEqual({ text: 'a cat', original: null })
   })
 })

@@ -1,7 +1,8 @@
 import { env, runDurableObjectAlarm, SELF } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_CONFIG } from '../game/config'
-import type { GameConfig, ProjectedState } from '../game/types'
+import type { GameConfig, GameState, ProjectedState } from '../game/types'
+import { upgradeStoredGame } from './room'
 import {
   CLOSE_LEFT,
   CLOSE_REPLACED,
@@ -142,9 +143,13 @@ async function connect(code: string, creds?: { playerId: string; secret: string 
   return new Client(r.webSocket!)
 }
 
-/** Room with a, b, c joined and ready. a is organizer. */
+/**
+ * Room with a, b, c joined and ready. a is organizer. The drawer may finish
+ * at once unless a test says otherwise: the minimum drawing time has its
+ * own tests, and everything else would just be waiting it out.
+ */
 async function readyRoom(config: Partial<GameConfig> = {}, room: Partial<RoomOptions> = {}) {
-  const code = await createRoom({ config, room })
+  const code = await createRoom({ config: { minDrawingMs: 0, ...config }, room })
   const a = await connect(code)
   await a.join('A')
   const b = await connect(code)
@@ -157,11 +162,11 @@ async function readyRoom(config: Partial<GameConfig> = {}, room: Partial<RoomOpt
   return { code, a, b, c, clients: { a, b, c } }
 }
 
-/** Start the game and return the clients keyed by role. */
-async function startedRoom(config: Partial<GameConfig> = {}, room: Partial<RoomOptions> = {}) {
+/** Start the game: the first drawer is deciding what to draw. */
+async function prepRoom(config: Partial<GameConfig> = {}, room: Partial<RoomOptions> = {}) {
   const r = await readyRoom(config, room)
   r.a.send({ type: 'start_game' })
-  const s = await r.a.stateWhere((s) => s.phase === 'drawing')
+  const s = await r.a.stateWhere((s) => s.phase === 'prep')
   const drawerId = s.turn!.drawerId
   const byId = (id: string) => [r.a, r.b, r.c].find((c) => c.playerId === id)!
   const drawer = byId(drawerId)
@@ -170,10 +175,24 @@ async function startedRoom(config: Partial<GameConfig> = {}, room: Partial<RoomO
   return { ...r, drawer, guessers, byId }
 }
 
-/** Finishing needs an intent first, so tests almost always want both. */
-async function finish(drawer: Client, intent = 'a giraffe on a jet ski'): Promise<void> {
+/** The drawer says what it is and starts the clock; `watchers` wait for it too. */
+async function begin(drawer: Client, intent = 'a giraffe on a jet ski', watchers: Client[] = []): Promise<void> {
   drawer.send({ type: 'set_intent', text: intent })
   await drawer.stateWhere((s) => s.turn?.intent === intent)
+  drawer.send({ type: 'start_drawing' })
+  for (const cl of [drawer, ...watchers]) await cl.stateWhere((s) => s.phase === 'drawing')
+}
+
+/** Start the game with the first drawer's clock running. Clients keyed by role. */
+async function startedRoom(config: Partial<GameConfig> = {}, room: Partial<RoomOptions> = {}) {
+  const r = await prepRoom(config, room)
+  await begin(r.drawer, undefined, r.guessers)
+  for (const cl of [r.a, r.b, r.c]) cl.clear()
+  return r
+}
+
+/** End the turn. The note was written before the clock started. */
+function finish(drawer: Client): void {
   drawer.send({ type: 'end_drawing' })
 }
 
@@ -206,6 +225,17 @@ describe('rooms API', () => {
     expect(s.config.judgingMs).toBe(DEFAULT_CONFIG.judgingMs)
   })
 
+  it('never lets the minimum drawing time outlast the clock', async () => {
+    // With a one-second clock the default 30 s minimum would lock "Done"
+    // until the timer ended the turn on its own.
+    const short = await connect(await createRoom({ config: { drawingMs: 1000 } }))
+    expect((await short.join('A')).config.minDrawingMs).toBe(1000)
+    const explicit = await connect(await createRoom({ config: { drawingMs: 1000, minDrawingMs: 5000 } }))
+    expect((await explicit.join('A')).config.minDrawingMs).toBe(1000)
+    const under = await connect(await createRoom({ config: { drawingMs: 1000, minDrawingMs: 400 } }))
+    expect((await under.join('A')).config.minDrawingMs).toBe(400)
+  })
+
   it('rejects malformed create bodies', async () => {
     const r = await SELF.fetch(`${BASE}/api/rooms`, { method: 'POST', body: 'not json' })
     expect(r.status).toBe(400)
@@ -233,6 +263,66 @@ describe('rooms API', () => {
     const r = await SELF.fetch(`${BASE}/api/rooms`, { method: 'POST', body: '{}' })
     expect(r.status).toBe(201)
     expect(r.headers.get('content-type')).toContain('application/json')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Stored games from before a deploy
+// ---------------------------------------------------------------------------
+
+describe('upgradeStoredGame', () => {
+  /** A game as persisted before prep, the minimum, and translation existed. */
+  const old = () => {
+    const guess = { id: 'g1', playerId: 'b', text: 'cat', submittedAt: 5 }
+    const turn = {
+      round: 1,
+      drawerId: 'a',
+      intent: 'a dog',
+      guesses: [guess],
+      correctGuessId: null,
+      grading: 'pending',
+      favoriteGuessId: null,
+      skipped: false,
+    }
+    const { prepMs: _p, minDrawingMs: _m, ...config } = DEFAULT_CONFIG
+    return JSON.parse(
+      JSON.stringify({
+        code: 'OLDR',
+        config: { ...config, drawingMs: 20_000 },
+        phase: 'drawing',
+        organizerId: 'a',
+        players: {},
+        round: 1,
+        drawOrder: ['a', 'b', 'c'],
+        drawerIdx: 0,
+        turn,
+        turns: [{ ...turn, guesses: [] }],
+        timerEndsAt: 1,
+        graceEndsAt: null,
+        nextGuessSeq: 2,
+      }),
+    ) as GameState
+  }
+
+  it('fills in the timers a room from before this code never had', () => {
+    const g = upgradeStoredGame(old())
+    expect(g.config.prepMs).toBe(DEFAULT_CONFIG.prepMs)
+    expect(g.config.minDrawingMs).toBe(20_000)
+    expect(g.config.drawingMs).toBe(20_000)
+    expect(g.config.judgingMs).toBe(DEFAULT_CONFIG.judgingMs)
+  })
+
+  it('gives old turns and guesses the translation fields a fresh one has', () => {
+    const g = upgradeStoredGame(old())
+    expect(g.turn!.intentTranslations).toBeNull()
+    expect(g.turn!.guesses[0]!.translations).toBeNull()
+    expect(g.turns[0]!.intentTranslations).toBeNull()
+    expect(g.turn!.intent).toBe('a dog')
+  })
+
+  it('leaves a current game as it is', () => {
+    const current = upgradeStoredGame(old())
+    expect(upgradeStoredGame(current)).toEqual(current)
   })
 })
 
@@ -435,18 +525,84 @@ describe('reconnect', () => {
 // ---------------------------------------------------------------------------
 
 describe('game flow', () => {
-  it('only the organizer can start; everyone sees the drawing phase', async () => {
+  it('only the organizer can start; everyone sees the first drawer deciding', async () => {
     const { a, b, c } = await readyRoom()
     b.send({ type: 'start_game' })
     expect((await b.next('error')).message).toMatch(/organizer/)
     const before = Date.now()
     a.send({ type: 'start_game' })
     for (const cl of [a, b, c]) {
-      const s = await cl.stateWhere((s) => s.phase === 'drawing')
+      const s = await cl.stateWhere((s) => s.phase === 'prep')
       expect(s.round).toBe(1)
-      expect(s.timerEndsAt).toBeGreaterThanOrEqual(before + DEFAULT_CONFIG.drawingMs)
-      expect(s.timerEndsAt).toBeLessThan(before + DEFAULT_CONFIG.drawingMs + 5000)
+      expect(s.timerEndsAt).toBeGreaterThanOrEqual(before + DEFAULT_CONFIG.prepMs)
+      expect(s.timerEndsAt).toBeLessThan(before + DEFAULT_CONFIG.prepMs + 5000)
     }
+  })
+
+  it('starts the drawing clock only once the drawer has said what it is', async () => {
+    const { drawer, guessers } = await prepRoom()
+    const [g1] = guessers as [Client, Client]
+    // Nothing to guess at yet.
+    g1.send({ type: 'submit_guess', text: 'early' })
+    expect((await g1.next('error')).code).toBe('not_drawing')
+    // And no clock without a note.
+    drawer.send({ type: 'start_drawing' })
+    expect((await drawer.next('error')).code).toBe('intent_required')
+
+    drawer.send({ type: 'set_intent', text: 'a catdog' })
+    const si = await drawer.stateWhere((s) => s.turn!.intent === 'a catdog')
+    expect(si.phase).toBe('prep')
+    // Only the drawer sees the note.
+    const sg = await g1.latestState()
+    expect(sg.turn!.intent).toBeNull()
+
+    const before = Date.now()
+    drawer.send({ type: 'start_drawing' })
+    const s = await g1.stateWhere((s) => s.phase === 'drawing')
+    expect(s.timerEndsAt).toBeGreaterThanOrEqual(before + DEFAULT_CONFIG.drawingMs)
+    // Strokes flow only now.
+    drawer.send({ type: 'stroke', strokes: [stroke('down')] })
+    expect((await g1.next('strokes')).strokes).toEqual([stroke('down')])
+  })
+
+  it('refuses to end the turn before the minimum drawing time', async () => {
+    const { drawer, guessers } = await startedRoom({ minDrawingMs: 60_000 })
+    finish(drawer)
+    const e = await drawer.next('error')
+    expect(e.code).toBe('too_early')
+    expect(e.message).toMatch(/longer/)
+    await sleep(20)
+    expect(guessers[0]!.has('state')).toBe(false)
+  })
+
+  it('lets the turn end once the minimum has run', async () => {
+    const { drawer } = await startedRoom({ minDrawingMs: 30 })
+    await sleep(40)
+    finish(drawer)
+    await drawer.stateWhere((s) => s.phase === 'reveal')
+  })
+
+  it('tells everyone who has answered without saying what', async () => {
+    const { drawer, guessers } = await startedRoom()
+    const [g1, g2] = guessers as [Client, Client]
+    g2.send({ type: 'submit_guess', text: 'second to be listed, first in' })
+    await drawer.stateWhere((s) => s.turn!.answered.length === 1)
+    g1.send({ type: 'submit_guess', text: 'cat' })
+    const sd = await drawer.stateWhere((s) => s.turn!.answered.length === 2)
+    expect(sd.turn!.answered).toEqual([g1.playerId, g2.playerId].sort())
+    expect(sd.turn!.guesses.map((g) => g.playerId)).toEqual([null, null])
+  })
+
+  it('leaves the guesses untranslated when no key is configured', async () => {
+    // The state local dev and this suite run in: everyone reads the guess
+    // as typed, and nothing waits on a translation that will never come.
+    const { drawer, guessers } = await startedRoom()
+    guessers[0]!.send({ type: 'submit_guess', text: '大象' })
+    await drawer.stateWhere((s) => s.turn!.guesses.length === 1)
+    finish(drawer)
+    const s = await guessers[1]!.stateWhere((s) => s.phase === 'judging')
+    expect(s.turn!.guesses[0]!.translations).toBeNull()
+    expect(s.turn!.intentTranslations).toBeNull()
   })
 
   it('relays the drawer’s strokes to guessers only', async () => {
@@ -471,7 +627,7 @@ describe('game flow', () => {
     expect(g2.has('strokes')).toBe(false)
     expect(drawer.has('strokes')).toBe(false)
 
-    await finish(drawer)
+    finish(drawer)
     await drawer.stateWhere((s) => s.phase !== 'drawing')
     drawer.send({ type: 'stroke', strokes: [stroke('down')] })
     await sleep(50)
@@ -512,7 +668,8 @@ describe('game flow', () => {
   })
 
   it('hides guess authors from the drawer until reveal, and runs a full turn', async () => {
-    const { a, drawer, guessers, byId } = await startedRoom()
+    const { a, drawer, guessers, byId } = await prepRoom()
+    await begin(drawer, 'a catdog')
     const [g1, g2] = guessers as [Client, Client]
     g1.send({ type: 'submit_guess', text: 'cat' })
     g2.send({ type: 'submit_guess', text: 'dog' })
@@ -521,14 +678,9 @@ describe('game flow', () => {
     expect(sd.turn!.guesses.map((g) => g.playerId)).toEqual([null, null])
     const s1 = await g1.stateWhere((s) => s.turn!.guesses.length === 2)
     expect(s1.turn!.guesses.map((g) => g.playerId)).toEqual([g1.playerId, null])
+    expect(s1.turn!.intent).toBeNull()
 
-    drawer.send({ type: 'set_intent', text: 'a catdog' })
-    const si = await drawer.stateWhere((s) => s.turn!.intent === 'a catdog')
-    expect(si.turn!.intent).toBe('a catdog')
-    const sg = await g1.latestState()
-    expect(sg.turn!.intent).toBeNull()
-
-    await finish(drawer, 'a catdog')
+    finish(drawer)
     await drawer.stateWhere((s) => s.phase === 'judging')
     const [, dogId] = sd.turn!.guesses.map((g) => g.id) as [string, string]
     // Correctness is the grader's job now; the drawer only picks a favourite.
@@ -548,7 +700,7 @@ describe('game flow', () => {
     // Organizer advances; the new drawer gets a fresh (reset) stroke buffer.
     for (const cl of [a, g1, g2, drawer]) cl.clear()
     a.send({ type: 'advance' })
-    const s2 = await a.stateWhere((s) => s.phase === 'drawing' && s.drawerIdx === 1)
+    const s2 = await a.stateWhere((s) => s.phase === 'prep' && s.drawerIdx === 1)
     const next = byId(s2.turn!.drawerId)
     expect(next).not.toBe(drawer)
     const reset = await next.next('strokes')
@@ -560,7 +712,7 @@ describe('game flow', () => {
     const batch = [stroke('down', 0.3, 0.3), stroke('up')]
     drawer.send({ type: 'stroke', strokes: batch })
     await guessers[0]!.next('strokes')
-    await finish(drawer)
+    finish(drawer)
     await drawer.stateWhere((s) => s.phase === 'reveal')
 
     const r = await SELF.fetch(`${BASE}/api/rooms/${code}/turns/0/strokes`)
@@ -571,7 +723,7 @@ describe('game flow', () => {
 
   it('serves an empty array for a turn nobody drew on', async () => {
     const { code, drawer, a } = await startedRoom()
-    await finish(drawer)
+    finish(drawer)
     await a.stateWhere((s) => s.phase === 'reveal')
     const r = await SELF.fetch(`${BASE}/api/rooms/${code}/turns/0/strokes`)
     expect(r.status).toBe(200)
@@ -617,8 +769,17 @@ describe('alarms', () => {
     await a.stateWhere((s) => s.phase === 'reveal')
     await sleep(15)
     await runDurableObjectAlarm(stub(code))
-    const s = await a.stateWhere((s) => s.phase === 'drawing' && s.drawerIdx === 1)
+    const s = await a.stateWhere((s) => s.phase === 'prep' && s.drawerIdx === 1)
     expect(s.turns).toHaveLength(1)
+  })
+
+  it('skips a drawer who never says what they will draw', async () => {
+    const { code, a, drawer } = await prepRoom({ prepMs: 30 })
+    await sleep(40)
+    expect(await runDurableObjectAlarm(stub(code))).toBe(true)
+    const s = await a.stateWhere((s) => s.drawerIdx === 1)
+    expect(s.turns[0]).toMatchObject({ drawerId: drawer.playerId, skipped: true })
+    expect(s.phase).toBe('prep')
   })
 
   it('skips the turn when the drawer disconnects past the grace period', async () => {
@@ -630,7 +791,7 @@ describe('alarms', () => {
     expect(await runDurableObjectAlarm(stub(code))).toBe(true)
     const s = await watcher.stateWhere((s) => s.drawerIdx === 1)
     expect(s.turns[0]).toMatchObject({ drawerId: drawer.playerId, skipped: true })
-    expect(s.phase).toBe('drawing')
+    expect(s.phase).toBe('prep')
     void a
   })
 })
@@ -672,11 +833,12 @@ describe('garbage collection', () => {
     // Burn through the round by hand: three drawers, no guesses, organizer advances.
     let drawerId = drawer.playerId!
     for (let i = 0; i < 3; i++) {
-      await finish(byId(drawerId))
+      if (i > 0) await begin(byId(drawerId))
+      finish(byId(drawerId))
       await a.stateWhere((st) => st.phase === 'reveal')
       a.send({ type: 'advance' })
       if (i < 2) {
-        const s = await a.stateWhere((st) => st.phase === 'drawing' && st.drawerIdx === i + 1)
+        const s = await a.stateWhere((st) => st.phase === 'prep' && st.drawerIdx === i + 1)
         drawerId = s.turn!.drawerId
       }
     }

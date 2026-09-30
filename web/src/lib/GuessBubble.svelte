@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Player, ProjectedGuess } from '$shared/game/types'
   import { accentOf } from './avatars'
+  import { t } from './i18n.svelte'
 
   let {
     guess,
@@ -20,6 +21,9 @@
     disabled?: boolean
     onpick?: (() => void) | undefined
   } = $props()
+
+  /** In the viewer's language when the room has it; as typed otherwise. */
+  const shown = $derived(t.read(guess.text, guess.translations))
 
   const classes = $derived(
     [
@@ -43,7 +47,10 @@
     {/if}
   </span>
 
-  <span class="text">{guess.text}</span>
+  <span class="text">
+    {shown.text}
+    {#if shown.original}<span class="orig">{shown.original}</span>{/if}
+  </span>
 
   {#if badge}
     <span class="badges">
@@ -101,6 +108,8 @@
   }
   .anon { background: var(--paper); font-weight: 900; color: var(--ink-soft); }
   .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  /* What they actually typed, for when the translation is only nearly right. */
+  .orig { display: block; font-size: 0.78rem; font-weight: 600; color: var(--ink-soft); }
   .badges { display: flex; gap: 0.25rem; flex: none; }
   .badge {
     display: grid;

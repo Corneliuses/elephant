@@ -11,6 +11,11 @@
   const drawer = $derived(game.players[turn.drawerId])
   const correct = $derived(turn.guesses.find((g) => g.id === turn.correctGuessId) ?? null)
   const favorite = $derived(turn.guesses.find((g) => g.id === turn.favoriteGuessId) ?? null)
+  // In the viewer's language, with what was typed beneath when it differs,
+  // the same as the reveal showed it.
+  const note = $derived(turn.intent ? t.read(turn.intent, turn.intentTranslations) : null)
+  const correctText = $derived(correct ? t.read(correct.text, correct.translations) : null)
+  const favoriteText = $derived(favorite ? t.read(favorite.text, favorite.translations) : null)
 
   let strokes = $state<Stroke[]>([])
   let loaded = false
@@ -41,9 +46,15 @@
   {/if}
   <figcaption>
     <span class="by">{drawer?.avatar} {drawer?.name}</span>
-    {#if turn.intent}<em class="was">“{turn.intent}”</em>{/if}
-    {#if correct}<span class="line"><span class="pip ok">✓</span>{correct.text}</span>{/if}
-    {#if favorite}<span class="line"><span class="pip fun">★</span>{favorite.text}</span>{/if}
+    {#if note}
+      <em class="was">“{note.text}”{#if note.original}<span class="orig">{note.original}</span>{/if}</em>
+    {/if}
+    {#if correctText}
+      <span class="line"><span class="pip ok">✓</span><span>{correctText.text}{#if correctText.original}<span class="orig">{correctText.original}</span>{/if}</span></span>
+    {/if}
+    {#if favoriteText}
+      <span class="line"><span class="pip fun">★</span><span>{favoriteText.text}{#if favoriteText.original}<span class="orig">{favoriteText.original}</span>{/if}</span></span>
+    {/if}
   </figcaption>
 </figure>
 
@@ -61,6 +72,7 @@
   figcaption { display: grid; gap: 0.2rem; font-size: 0.85rem; font-weight: 700; }
   .by { font-weight: 900; }
   .was { color: var(--ink-soft); }
+  .orig { display: block; font-size: 0.75rem; font-weight: 600; font-style: normal; color: var(--ink-soft); }
   .line { display: flex; align-items: center; gap: 0.35rem; overflow-wrap: anywhere; }
   .pip {
     display: grid;

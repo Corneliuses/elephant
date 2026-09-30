@@ -5,6 +5,7 @@
   import Home from './screens/Home.svelte'
   import Join from './screens/Join.svelte'
   import Lobby from './screens/Lobby.svelte'
+  import Prep from './screens/Prep.svelte'
   import Drawing from './screens/Drawing.svelte'
   import Judging from './screens/Judging.svelte'
   import Reveal from './screens/Reveal.svelte'
@@ -46,6 +47,8 @@
   </div>
 {:else if room.game.phase === 'lobby'}
   <Lobby />
+{:else if room.game.phase === 'prep'}
+  <Prep />
 {:else if room.game.phase === 'drawing'}
   <Drawing />
 {:else if room.game.phase === 'judging'}
