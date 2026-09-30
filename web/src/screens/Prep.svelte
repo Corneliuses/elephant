@@ -6,6 +6,7 @@
    * settled before anyone has seen a line.
    */
   import { fly, scale } from 'svelte/transition'
+  import { clean } from '$shared/game/machine'
   import Timer from '../lib/Timer.svelte'
   import { room } from '../lib/room.svelte'
   import { accentOf } from '../lib/avatars'
@@ -16,7 +17,9 @@
   const drawer = $derived(game.players[turn.drawerId])
 
   let intent = $state('')
-  const canStart = $derived(intent.trim().length > 0)
+  // The reducer's own test for "something was typed": a note of nothing
+  // but invisible characters must not unlock a Start the server refuses.
+  const canStart = $derived(clean(intent).length > 0)
 
   /*
    * The same IME guard as the guess bar (see Drawing.svelte): the Enter that
@@ -48,7 +51,7 @@
     }
     // The element, not the binding: a tap blurred the field, which committed
     // any open composition, and the element holds the finished characters.
-    const text = (intentEl?.value ?? intent).trim()
+    const text = clean(intentEl?.value ?? intent)
     if (!text) return
     room.send({ type: 'set_intent', text })
     room.send({ type: 'start_drawing' })

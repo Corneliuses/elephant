@@ -1,7 +1,8 @@
 import { env, runDurableObjectAlarm, SELF } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_CONFIG } from '../game/config'
-import type { GameConfig, ProjectedState } from '../game/types'
+import type { GameConfig, GameState, ProjectedState } from '../game/types'
+import { upgradeStoredGame } from './room'
 import {
   CLOSE_LEFT,
   CLOSE_REPLACED,
@@ -224,6 +225,17 @@ describe('rooms API', () => {
     expect(s.config.judgingMs).toBe(DEFAULT_CONFIG.judgingMs)
   })
 
+  it('never lets the minimum drawing time outlast the clock', async () => {
+    // With a one-second clock the default 30 s minimum would lock "Done"
+    // until the timer ended the turn on its own.
+    const short = await connect(await createRoom({ config: { drawingMs: 1000 } }))
+    expect((await short.join('A')).config.minDrawingMs).toBe(1000)
+    const explicit = await connect(await createRoom({ config: { drawingMs: 1000, minDrawingMs: 5000 } }))
+    expect((await explicit.join('A')).config.minDrawingMs).toBe(1000)
+    const under = await connect(await createRoom({ config: { drawingMs: 1000, minDrawingMs: 400 } }))
+    expect((await under.join('A')).config.minDrawingMs).toBe(400)
+  })
+
   it('rejects malformed create bodies', async () => {
     const r = await SELF.fetch(`${BASE}/api/rooms`, { method: 'POST', body: 'not json' })
     expect(r.status).toBe(400)
@@ -251,6 +263,66 @@ describe('rooms API', () => {
     const r = await SELF.fetch(`${BASE}/api/rooms`, { method: 'POST', body: '{}' })
     expect(r.status).toBe(201)
     expect(r.headers.get('content-type')).toContain('application/json')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Stored games from before a deploy
+// ---------------------------------------------------------------------------
+
+describe('upgradeStoredGame', () => {
+  /** A game as persisted before prep, the minimum, and translation existed. */
+  const old = () => {
+    const guess = { id: 'g1', playerId: 'b', text: 'cat', submittedAt: 5 }
+    const turn = {
+      round: 1,
+      drawerId: 'a',
+      intent: 'a dog',
+      guesses: [guess],
+      correctGuessId: null,
+      grading: 'pending',
+      favoriteGuessId: null,
+      skipped: false,
+    }
+    const { prepMs: _p, minDrawingMs: _m, ...config } = DEFAULT_CONFIG
+    return JSON.parse(
+      JSON.stringify({
+        code: 'OLDR',
+        config: { ...config, drawingMs: 20_000 },
+        phase: 'drawing',
+        organizerId: 'a',
+        players: {},
+        round: 1,
+        drawOrder: ['a', 'b', 'c'],
+        drawerIdx: 0,
+        turn,
+        turns: [{ ...turn, guesses: [] }],
+        timerEndsAt: 1,
+        graceEndsAt: null,
+        nextGuessSeq: 2,
+      }),
+    ) as GameState
+  }
+
+  it('fills in the timers a room from before this code never had', () => {
+    const g = upgradeStoredGame(old())
+    expect(g.config.prepMs).toBe(DEFAULT_CONFIG.prepMs)
+    expect(g.config.minDrawingMs).toBe(20_000)
+    expect(g.config.drawingMs).toBe(20_000)
+    expect(g.config.judgingMs).toBe(DEFAULT_CONFIG.judgingMs)
+  })
+
+  it('gives old turns and guesses the translation fields a fresh one has', () => {
+    const g = upgradeStoredGame(old())
+    expect(g.turn!.intentTranslations).toBeNull()
+    expect(g.turn!.guesses[0]!.translations).toBeNull()
+    expect(g.turns[0]!.intentTranslations).toBeNull()
+    expect(g.turn!.intent).toBe('a dog')
+  })
+
+  it('leaves a current game as it is', () => {
+    const current = upgradeStoredGame(old())
+    expect(upgradeStoredGame(current)).toEqual(current)
   })
 })
 

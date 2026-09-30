@@ -503,6 +503,14 @@ describe('end_drawing', () => {
     expect(earliestEndAt(lobby())).toBe(0)
   })
 
+  it('never puts the minimum past the end of the clock', () => {
+    // A room with a short clock and the default minimum: the deadline is
+    // as late as finishing can be gated, or "Done" would never unlock.
+    const s: GameState = { ...drawing(), config: { ...CFG, drawingMs: 1000, minDrawingMs: 30_000 } }
+    const s1: GameState = { ...s, timerEndsAt: T0 + 10 + 1000 }
+    expect(earliestEndAt(s1)).toBe(s1.timerEndsAt)
+  })
+
   it('skips straight to reveal when there are no guesses', () => {
     const s = run(drawing(), done('a'))
     expect(s.phase).toBe('reveal')

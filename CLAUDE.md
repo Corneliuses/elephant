@@ -133,7 +133,12 @@ re-arms the single alarm via `scheduleAlarm()`.
 
 - Storage keys: `game`, `meta` (room options, `emptySince`, `endedAt`),
   `secret:<playerId>`, `strokes:<turnIdx>`. `load()` runs under
-  `blockConcurrencyWhile` in the constructor.
+  `blockConcurrencyWhile` in the constructor and passes the stored game
+  through `upgradeStoredGame`: storage outlives a deploy, so any new
+  config or turn field must be backfilled there or an old room computes
+  `now + undefined`. Extend it whenever `GameConfig` or `Turn` grows.
+- `sanitizeConfig` clamps `minDrawingMs` to `drawingMs`; `earliestEndAt`
+  also takes the min, so the reducer is safe with an unsanitised config.
 - Sockets use the Hibernatable WebSocket API. Identity lives in the
   socket attachment (`{playerId}`), never in instance fields. In
   `webSocketClose` the DO must echo `ws.close()` to finish the handshake.
@@ -145,8 +150,9 @@ re-arms the single alarm via `scheduleAlarm()`.
   collection, then re-arms.
 - Strokes never enter the reducer. Relay happens in `handleStroke`,
   only from the current drawer during `drawing`, never echoed to sender.
-- `maybeGrade()` and `maybeTranslate()` fire their Gemini calls on
-  entering `judging` via `waitUntil`, and `applyGrade` / `applyTranslations`
+- `maybeGrade()` fires on entering `judging`; `maybeTranslate()` on
+  `judging` *or* `reveal`, since a turn with no guesses skips judging and
+  the note still needs rendering. Both go via `waitUntil`, and `applyGrade` / `applyTranslations`
   drop the result if the live turn moved on meanwhile. `grader.ts` and
   `translator.ts` are pure fetch + parsing over `gemini.ts` and are tested
   in node (the `grader` vitest project), not in workerd.
@@ -180,6 +186,9 @@ is no re-render, so no memoisation.
   goes in `Strings` — all four languages, or it is a type error. Player
   text is translated only by the server (see `translator.ts`); the client
   never sends the language anywhere.
+- A button gated on "something was typed" uses `clean` from
+  `$shared/game/machine`, not `.trim()`: the server strips invisible
+  characters and refuses what is left, so the gate must agree with it.
 - `screens/Prep.svelte` is the turn's first screen (note field + Start for
   the drawer, waiting for everyone else); `lib/Answered.svelte` is the
   who-has-answered strip under the canvas during `drawing`.

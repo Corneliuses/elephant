@@ -271,8 +271,10 @@ grading, for the same reasons.
   guesses and note to Gemini as one numbered list, alongside the grading
   call, and asks for each item in every `Lang`. Judging is the first
   moment anyone but the author sees a guess, and the guesses are final by
-  then, so one call covers the turn. A guess edited during drawing simply
-  drops whatever it carried.
+  then, so one call covers the turn. A turn with no guesses skips judging,
+  so the call also starts on entering `reveal`; the per-turn guard holds
+  across the two. A guess edited during drawing simply drops whatever it
+  carried.
 - The reply is applied only if the live turn is still the one that was
   sent, and is accepted during `reveal` too; the reducer keeps `turn` and
   `turns[-1]` in step.
@@ -352,8 +354,15 @@ picture regardless of screen size.
 | `GET /api/rooms/:code/turns/:i/strokes` | Stroke log of turn `i` for the gallery. |
 
 Config overrides at creation are clamped to sane ranges (each timer 1 ms
-to 1 h, etc.); the same fields the game uses. `room.idleTtlMs` and
-`room.endedTtlMs` control garbage collection.
+to 1 h, the minimum drawing time to at most the drawing timer, etc.); the
+same fields the game uses. `room.idleTtlMs` and `room.endedTtlMs` control
+garbage collection.
+
+Storage outlives a deploy, so `load()` passes a stored game through
+`upgradeStoredGame`: config fields the room never had go through the same
+sanitiser as a new room's, and turns and guesses gain the fields a fresh
+one has. Without that, a room mid-game when new config lands would
+compute its next deadline as `now + undefined`.
 
 The worker forwards to the DO with the room code baked into the DO name
 (`idFromName(code)`); the DO learns its code from the `/create` body.
@@ -436,7 +445,7 @@ socket attachment so it survives hibernation.
 |---|---|---|
 | Prep | 60 s | entering `prep`; expiry skips the turn |
 | Drawing | 90 s | `start_drawing` |
-| Minimum drawing | 30 s | not an alarm: `end_drawing` is refused until it has run, and the client counts it down |
+| Minimum drawing | 30 s | not an alarm: `end_drawing` is refused until it has run, and the client counts it down. Clamped to the drawing timer, so it can never outlast the clock |
 | Judging | 60 s | entering `judging` |
 | Reveal | 8 s | entering `reveal` |
 | Drawer-disconnect grace | 15 s | drawer `disconnect` during `prep`/`drawing`/`judging` |

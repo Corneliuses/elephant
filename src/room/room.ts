@@ -6,7 +6,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import { DEFAULT_CONFIG } from '../game/config'
 import { apply, createGame, nextAlarmAt, project } from '../game/machine'
-import type { GameConfig, GameEvent, GameState, PlayerId } from '../game/types'
+import type { GameConfig, GameEvent, GameState, PlayerId, Turn } from '../game/types'
 import { type GradeGuess, gradeGuesses } from './grader'
 import { type TranslateItem, type TranslateOutcome, translateTurn } from './translator'
 import {
@@ -62,7 +62,8 @@ export class RoomDO extends DurableObject<Env> {
 
   private async load(): Promise<void> {
     const s = this.ctx.storage
-    this.game = (await s.get<GameState>(KEY_GAME)) ?? null
+    const stored = await s.get<GameState>(KEY_GAME)
+    this.game = stored ? upgradeStoredGame(stored) : null
     this.meta = (await s.get<RoomMeta>(KEY_META)) ?? null
     this.strokesTurn = this.game ? liveTurnIndex(this.game) : -1
     this.strokes = this.strokesTurn >= 0 ? ((await s.get<Stroke[]>(keyStrokes(this.strokesTurn))) ?? []) : []
@@ -364,10 +365,14 @@ export class RoomDO extends DurableObject<Env> {
    * Render the turn's text into every language once it reaches judging,
    * when the guesses are final and about to be shown to everyone. Runs
    * alongside grading; a missing key just leaves the guesses as typed.
+   *
+   * A turn with no guesses skips judging, so reveal counts too: the note
+   * still needs rendering there. The per-turn guard holds across the two
+   * because `liveTurnIndex` gives a turn the same index in both.
    */
   private maybeTranslate(): void {
     const game = this.game
-    if (!game?.turn || game.phase !== 'judging') return
+    if (!game?.turn || (game.phase !== 'judging' && game.phase !== 'reveal')) return
 
     const turnIdx = liveTurnIndex(game)
     if (this.translatingTurn === turnIdx) return
@@ -560,14 +565,40 @@ function isStroke(x: unknown): x is Stroke {
 const clamp = (v: unknown, lo: number, hi: number, dflt: number): number =>
   typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : dflt
 
+/**
+ * A game as it was persisted, brought up to the current shape.
+ *
+ * Storage outlives a deploy, so a room mid-game when this code lands has a
+ * config without the fields it added and turns without theirs; used as they
+ * are, the next deadline is `now + undefined`. Missing config goes back
+ * through the same sanitiser new rooms use, and missing turn fields take
+ * the value a fresh turn would have.
+ */
+export function upgradeStoredGame(stored: GameState): GameState {
+  const upgradeTurn = (t: Turn): Turn => ({
+    ...t,
+    intentTranslations: t.intentTranslations ?? null,
+    guesses: t.guesses.map((g) => ({ ...g, translations: g.translations ?? null })),
+  })
+  return {
+    ...stored,
+    config: { ...DEFAULT_CONFIG, ...sanitizeConfig(stored.config) },
+    turn: stored.turn ? upgradeTurn(stored.turn) : null,
+    turns: stored.turns.map(upgradeTurn),
+  }
+}
+
 function sanitizeConfig(c: Partial<GameConfig> | undefined): Partial<GameConfig> {
   if (!isRecord(c)) return {}
   const d = DEFAULT_CONFIG
   const hour = 3_600_000
+  const drawingMs = clamp(c.drawingMs, 1, hour, d.drawingMs)
   return {
     prepMs: clamp(c.prepMs, 1, hour, d.prepMs),
-    drawingMs: clamp(c.drawingMs, 1, hour, d.drawingMs),
-    minDrawingMs: clamp(c.minDrawingMs, 0, hour, d.minDrawingMs),
+    drawingMs,
+    // A minimum past the end of the clock would lock "Done" until the
+    // timer ended the turn anyway, so it can be at most the clock itself.
+    minDrawingMs: clamp(c.minDrawingMs, 0, drawingMs, Math.min(d.minDrawingMs, drawingMs)),
     judgingMs: clamp(c.judgingMs, 1, hour, d.judgingMs),
     revealMs: clamp(c.revealMs, 1, hour, d.revealMs),
     graceMs: clamp(c.graceMs, 1, hour, d.graceMs),

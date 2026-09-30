@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fly, scale } from 'svelte/transition'
-  import { earliestEndAt } from '$shared/game/machine'
+  import { clean, earliestEndAt } from '$shared/game/machine'
   import type { Stroke } from '$shared/room/protocol'
   import Answered from '../lib/Answered.svelte'
   import Canvas from '../lib/Canvas.svelte'
@@ -81,7 +81,7 @@
   function submitGuess(e: SubmitEvent) {
     e.preventDefault()
     // The element, not the binding: it holds the committed characters.
-    const text = (guessEl?.value ?? guess).trim()
+    const text = clean(guessEl?.value ?? guess)
     if (!text) return
     room.send({ type: 'submit_guess', text })
     // The card below becomes the record; the field goes back to inviting a change.
@@ -165,7 +165,7 @@
         oncompositionstart={() => (composing = true)}
         oncompositionend={() => (composing = false)}
       />
-      <button class="btn primary" disabled={!guess.trim()}>{myGuess ? t.s.changeBtn : t.s.guessBtn}</button>
+      <button class="btn primary" disabled={!clean(guess)}>{myGuess ? t.s.changeBtn : t.s.guessBtn}</button>
     </form>
 
     {#if myGuess}

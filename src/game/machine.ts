@@ -136,8 +136,11 @@ const INVISIBLE = /[­؜᠎​‎‏‪-‮⁠-⁤⁦-⁩﻿]/gu
  *
  * Anything that would show as blank comes back empty, so the callers' existing
  * "not empty" checks reject it rather than seating a player nobody can see.
+ *
+ * Exported for the client, so a button it gates on "something was typed"
+ * agrees with the refusal the server would send.
  */
-function clean(text: string): string {
+export function clean(text: string): string {
   const stripped = text.replace(INVISIBLE, '').normalize('NFC').trim()
   // The joiners survived the strip because emoji need them, but a string of
   // nothing else is still a blank chip on everybody's screen.
@@ -273,7 +276,10 @@ function endDrawing(state: GameState, ev: Ev<'end_drawing'>): ApplyResult {
  */
 export function earliestEndAt(state: Pick<GameState, 'timerEndsAt' | 'config'>): number {
   if (state.timerEndsAt === null) return 0
-  return state.timerEndsAt - state.config.drawingMs + state.config.minDrawingMs
+  const { drawingMs, minDrawingMs } = state.config
+  // A minimum longer than the clock itself would lock "Done" until the
+  // timer ends the turn anyway; the deadline is the latest it can be.
+  return state.timerEndsAt - drawingMs + Math.min(minDrawingMs, drawingMs)
 }
 
 // --- Judging ---------------------------------------------------------------
