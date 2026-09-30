@@ -41,9 +41,9 @@
   {/if}
   <figcaption>
     <span class="by">{drawer?.avatar} {drawer?.name}</span>
-    {#if turn.intent}<em class="was">“{turn.intent}”</em>{/if}
-    {#if correct}<span class="line"><span class="pip ok">✓</span>{correct.text}</span>{/if}
-    {#if favorite}<span class="line"><span class="pip fun">★</span>{favorite.text}</span>{/if}
+    {#if turn.intent}<em class="was">“{t.read(turn.intent, turn.intentTranslations).text}”</em>{/if}
+    {#if correct}<span class="line"><span class="pip ok">✓</span>{t.read(correct.text, correct.translations).text}</span>{/if}
+    {#if favorite}<span class="line"><span class="pip fun">★</span>{t.read(favorite.text, favorite.translations).text}</span>{/if}
   </figcaption>
 </figure>
 

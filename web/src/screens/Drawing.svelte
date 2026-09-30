@@ -1,8 +1,11 @@
 <script lang="ts">
   import { fly, scale } from 'svelte/transition'
+  import { earliestEndAt } from '$shared/game/machine'
   import type { Stroke } from '$shared/room/protocol'
+  import Answered from '../lib/Answered.svelte'
   import Canvas from '../lib/Canvas.svelte'
   import Timer from '../lib/Timer.svelte'
+  import { clock } from '../lib/clock.svelte'
   import { room } from '../lib/room.svelte'
   import { accentOf } from '../lib/avatars'
   import { t } from '../lib/i18n.svelte'
@@ -17,10 +20,15 @@
 
   let color = $state(COLORS[0]!)
   let width = $state(WIDTHS[1]!)
-  let intent = $state('')
-  /** The grader needs this, so finishing is gated on it. */
-  const canFinish = $derived(intent.trim().length > 0)
   let guess = $state('')
+
+  /**
+   * Everyone else needs a fair look before the drawer can call it, so "Done"
+   * stays locked for the first `minDrawingMs` and counts down. The clock is
+   * server-corrected, so the button unlocks when the server would agree.
+   */
+  const lockedFor = $derived(Math.max(0, earliestEndAt(game) - clock.now))
+  const canFinish = $derived(lockedFor === 0)
 
   // Network sends are batched; local painting is not. The drawer sees ink in
   // the same frame they made it, while the wire carries ~20 batches a second.
@@ -80,34 +88,9 @@
     guess = ''
   }
 
-  let intentEl = $state<HTMLInputElement | null>(null)
-  let intentTimer: ReturnType<typeof setTimeout> | null = null
-  function onIntent() {
-    if (intentTimer) clearTimeout(intentTimer)
-    intentTimer = setTimeout(() => room.send({ type: 'set_intent', text: intent }), 400)
-  }
-
-  /**
-   * Flush the debounced note before finishing. The button unlocks on local
-   * state, so a fast tap would otherwise reach the server before the intent
-   * does and be rejected.
-   */
   function finish() {
-    if (intentTimer) {
-      clearTimeout(intentTimer)
-      intentTimer = null
-    }
-    // Read the field itself rather than the binding: tapping the button
-    // blurs the input, which commits any open IME composition, and the
-    // element has the finished characters before this handler runs.
-    room.send({ type: 'set_intent', text: intentEl?.value ?? intent })
     room.send({ type: 'end_drawing' })
   }
-
-  $effect(() => {
-    // Adopt whatever the server already has, e.g. after a reconnect.
-    if (turn.intent && !intent) intent = turn.intent
-  })
 </script>
 
 <div class="screen">
@@ -116,16 +99,10 @@
       <span class="face" style="background: {accentOf(turn.drawerId)}">{drawer?.avatar}</span>
       <div>
         <strong>{room.isDrawer ? t.s.youAreDrawing : t.s.isDrawing(drawer?.name ?? '')}</strong>
-        <p class="sub">
-          {#if turn.guesses.length > 0}
-            <!-- The drawer wants this too: it is how they decide when to stop. -->
-            {t.s.guessesIn(turn.guesses.length)}
-          {:else if room.isDrawer}
-            {t.s.drawAnything}
-          {:else}
-            {t.s.noGuessesYet}
-          {/if}
-        </p>
+        {#if room.isDrawer && turn.intent}
+          <!-- Their own note, fixed before the clock started. Nobody else sees it. -->
+          <p class="sub note">“{turn.intent}”</p>
+        {/if}
       </div>
     </div>
     {#if game.timerEndsAt}
@@ -141,6 +118,9 @@
     {width}
     {onstrokes}
   />
+
+  <!-- Who has answered. The drawer reads it to know when to stop. -->
+  <Answered />
 
   {#if room.isDrawer}
     <div class="tools" in:fly={{ y: 16, duration: 240 }}>
@@ -165,23 +145,12 @@
       </div>
     </div>
 
-    <input
-      class="field"
-      class:needed={!canFinish}
-      bind:this={intentEl}
-      bind:value={intent}
-      oninput={onIntent}
-      placeholder={t.s.intentPlaceholder}
-      maxlength="100"
-      aria-label={t.s.intentLabel}
-    />
-
     <button
       class="btn primary wide"
       disabled={!canFinish}
       onclick={finish}
     >
-      {canFinish ? t.s.doneDrawing : t.s.sayWhatFirst}
+      {canFinish ? t.s.doneDrawing : t.s.doneIn(Math.ceil(lockedFor / 1000))}
     </button>
   {:else}
     <form class="guessbar" onsubmit={submitGuess}>
@@ -222,6 +191,7 @@
     flex: none;
   }
   .sub { margin: 0.1rem 0 0; font-size: 0.85rem; font-weight: 700; color: var(--ink-soft); }
+  .note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Wraps to two rows on narrow phones rather than running off the edge. */
   .tools {
@@ -260,7 +230,6 @@
   .size:active { transform: scale(0.9); }
   .wipe { font-weight: 900; }
 
-  .field.needed { border-color: var(--hot); }
   .guessbar { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; }
   .mine {
     display: grid;

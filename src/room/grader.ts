@@ -17,13 +17,7 @@
  * picker adds nothing to this prompt to get wrong.
  */
 
-const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions'
-// Matches the `GEMINI_MODEL` var in wrangler.jsonc, which normally supplies
-// this. Only reached when that var is missing, so it should still name a
-// model that works: the free tier counts its request quota per model, and
-// this task is trivial classification against a hard `gradingMs` deadline
-// rather than anything that rewards a heavier reasoner.
-const DEFAULT_MODEL = 'gemini-3.5-flash-lite'
+import { DEFAULT_MODEL, ask, extractJson, oneLine } from './gemini'
 
 export interface GradeGuess {
   id: string
@@ -54,15 +48,13 @@ const SCHEMA = {
  * without making a network call.
  */
 export function buildPrompt(intent: string, guesses: readonly GradeGuess[]): string {
-  const numbered = guesses
-    // Newlines would let a guess forge structure in the block below.
-    .map((g, i) => `${i + 1}. ${g.text.replace(/\s+/g, ' ').trim()}`)
-    .join('\n')
+  // Newlines would let a guess forge structure in the block below.
+  const numbered = guesses.map((g, i) => `${i + 1}. ${oneLine(g.text)}`).join('\n')
 
   return `You are scoring a drawing game. The person drawing was asked to say what they drew, and the other players guessed.
 
 WHAT WAS DRAWN (from the person who drew it):
-${intent.replace(/\s+/g, ' ').trim()}
+${oneLine(intent)}
 
 GUESSES:
 ${numbered}
@@ -89,65 +81,9 @@ export function firstCorrect(guesses: readonly GradeGuess[], numbers: readonly n
   return null
 }
 
-/**
- * Pull the model's JSON text out of an Interactions `steps` list.
- *
- * The real reply is a list of steps, not a single string: reasoning comes
- * first and the answer last, so the *first* step is the wrong one to read.
- * Only `model_output` steps carry the reply, and its `content` is a list of
- * parts, so the text parts are concatenated in order.
- */
-function fromSteps(body: object): string | null {
-  const steps = (body as { steps?: unknown }).steps
-  if (!Array.isArray(steps)) return null
-  let text = ''
-  for (const step of steps) {
-    if (typeof step !== 'object' || step === null) continue
-    if ((step as { type?: unknown }).type !== 'model_output') continue
-    const content = (step as { content?: unknown }).content
-    if (!Array.isArray(content)) continue
-    for (const part of content) {
-      if (typeof part !== 'object' || part === null) continue
-      if ((part as { type?: unknown }).type !== 'text') continue
-      const t = (part as { text?: unknown }).text
-      if (typeof t === 'string') text += t
-    }
-  }
-  return text === '' ? null : text
-}
-
-/**
- * Pull the model's JSON text out of the response envelope.
- *
- * The Interactions API returns it as a `steps` list (see `fromSteps`). The
- * `output_text` convenience field and the older `generateContent`
- * `candidates` shape are also accepted, so a change of endpoint does not
- * silently stop grading.
- */
-function extractText(body: unknown): string | null {
-  if (typeof body !== 'object' || body === null) return null
-  const direct = (body as { output_text?: unknown }).output_text
-  if (typeof direct === 'string') return direct
-  const stepped = fromSteps(body)
-  if (stepped !== null) return stepped
-  const candidates = (body as { candidates?: unknown }).candidates
-  if (!Array.isArray(candidates)) return null
-  const parts = (candidates[0] as { content?: { parts?: unknown } } | undefined)?.content?.parts
-  if (!Array.isArray(parts)) return null
-  const text = (parts[0] as { text?: unknown } | undefined)?.text
-  return typeof text === 'string' ? text : null
-}
-
 /** Parse the model's reply into the numbers it actually returned. */
 export function parseVerdict(body: unknown, count: number): number[] | null {
-  const text = extractText(body)
-  if (text === null) return null
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    return null
-  }
+  const parsed = extractJson(body)
   if (typeof parsed !== 'object' || parsed === null) return null
   const correct = (parsed as { correct?: unknown }).correct
   if (!Array.isArray(correct)) return null
@@ -163,23 +99,10 @@ export async function gradeGuesses(
 ): Promise<GradeOutcome> {
   if (guesses.length === 0) return { correctGuessId: null, ok: true }
 
-  try {
-    const res = await fetch(ENDPOINT, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({
-        model,
-        input: buildPrompt(intent, guesses),
-        response_format: { type: 'text', mime_type: 'application/json', schema: SCHEMA },
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    })
-    if (!res.ok) return { correctGuessId: null, ok: false }
-    const numbers = parseVerdict(await res.json(), guesses.length)
-    if (numbers === null) return { correctGuessId: null, ok: false }
-    return { correctGuessId: firstCorrect(guesses, numbers), ok: true }
-  } catch {
-    // Timeout, network failure, malformed body: the game carries on ungraded.
-    return { correctGuessId: null, ok: false }
-  }
+  // Timeout, network failure, malformed body: the game carries on ungraded.
+  const body = await ask(apiKey, model, buildPrompt(intent, guesses), SCHEMA, timeoutMs)
+  if (body === null) return { correctGuessId: null, ok: false }
+  const numbers = parseVerdict(body, guesses.length)
+  if (numbers === null) return { correctGuessId: null, ok: false }
+  return { correctGuessId: firstCorrect(guesses, numbers), ok: true }
 }

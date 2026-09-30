@@ -1,7 +1,8 @@
 # Elephant
 
-A phones-in-a-circle drawing game. One person draws for 90 seconds, everyone
-else guesses. The **correct** answer is graded automatically; the drawer picks
+A phones-in-a-circle drawing game. One person says what they will draw, then
+draws it for up to 90 seconds; everyone else guesses, each in their own
+language. The **correct** answer is graded automatically; the drawer picks
 their **favourite**. Two points each, and one answer can win both.
 
 Named for the parable of the blind men and the elephant (Tittha Sutta): each
@@ -27,9 +28,9 @@ Playable end to end and deployed at
 
 ```sh
 npm install
-npm test          # four projects: game + grader in node, room in
-                  # workerd, client in happy-dom
+npm test          # four projects: game + grader/translator in node,
+                  # room in workerd, client in happy-dom
 npm run build     # build the client into web/dist
 npm run dev       # wrangler dev: worker + DO + built assets, :8787
-npm run e2e       # six real-browser scenarios against `npm run dev`
+npm run e2e       # nine real-browser scenarios against `npm run dev`
 ```

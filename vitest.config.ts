@@ -19,14 +19,14 @@ export default defineConfig({
         test: {
           name: 'room',
           include: ['src/room/**/*.test.ts'],
-          // The grader is plain fetch + parsing; it runs in node instead.
-          exclude: ['src/room/grader.test.ts'],
+          // The grader and translator are plain fetch + parsing; they run in node instead.
+          exclude: ['src/room/grader.test.ts', 'src/room/translator.test.ts'],
         },
       },
       {
         test: {
           name: 'grader',
-          include: ['src/room/grader.test.ts'],
+          include: ['src/room/grader.test.ts', 'src/room/translator.test.ts'],
         },
       },
       {

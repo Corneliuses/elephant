@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Elephant is a mobile-web party drawing game: one player draws for 90 s,
-the others guess. Correctness is graded by an LLM; the drawer picks their
-favourite. 2 pts each, and one answer can win both. Read
+Elephant is a mobile-web party drawing game: one player says what they
+will draw, then draws it for up to 90 s while the others guess, each in
+their own language. Correctness is graded by an LLM; the drawer picks
+their favourite. 2 pts each, and one answer can win both. Read
 `docs/PROPOSAL.md` for the rules and decisions and `docs/DESIGN.md` for
 the architecture, events table, grading, and client brief.
 Those two docs are the source of truth; keep them in sync when behaviour
@@ -26,7 +27,7 @@ npm install
 npm test                                  # all four vitest projects
 npx vitest run --project game             # src/game in node
 npx vitest run --project room             # src/room in workerd (Miniflare)
-npx vitest run --project grader           # src/room/grader.test.ts in node
+npx vitest run --project grader           # grader + translator tests in node
 npx vitest run --project web              # web/src in happy-dom
 npx vitest run src/game/machine.test.ts   # one file
 npx vitest run -t "grace carries"         # tests matching a name
@@ -37,7 +38,8 @@ npm run dev                               # wrangler dev (worker + DO + built as
 npm run dev:web                           # vite, :5173, proxies /api to :8787
 npm run build                             # vite build -> web/dist (deploy needs this first)
 npm run check:web                         # svelte-check
-npm run e2e                               # eight scenarios in 3 browser contexts; needs `npm run dev`
+npm run e2e                               # nine scenarios in 3 browser contexts; needs `npm run dev`
+ELEPHANT_ONLY=languages npm run e2e       # just the scenarios whose name contains that
 node scripts/icons.mjs                    # regenerate PWA icons after changing the mark
 ```
 
@@ -77,10 +79,12 @@ from Cloudflare, read the clock, or call `Math.random`.
 - `project(state, viewerId)` is what goes over the wire. It hides guess
   authors (except the viewer's own) and the drawer's `intent` until the
   reveal phase, and strips `nextGuessSeq`.
-- Phases: `lobby → drawing → judging → reveal → (drawing | round_end) → (drawing | ended)`.
-  `judging` is skipped when there are no guesses. Completed turns are
-  appended to `turns` on entering `reveal` (or when skipped); `turn` is the
-  live one and, during reveal, is the same object as `turns[at(-1)]`.
+- Phases: `lobby → prep → drawing → judging → reveal → (prep | round_end) → (prep | ended)`.
+  A turn opens in `prep`: the drawer writes their note and `start_drawing`
+  starts the clock. `judging` is skipped when there are no guesses.
+  Completed turns are appended to `turns` on entering `reveal` (or when
+  skipped); `turn` is the live one and, during reveal, is the same object
+  as `turns[at(-1)]`.
 - Strokes are deliberately **not** in this state. The DO relays and
   buffers them separately (see DESIGN.md "Strokes are not game state").
 
@@ -99,16 +103,25 @@ Rules that are easy to get wrong when extending:
 - The drawer picks only a **favourite** (`judge`). Correctness arrives
   separately as a `grade` event from the DO, which calls Gemini. One guess
   may win both awards. The drawer never scores.
-- `set_intent` is **required** before `end_drawing` is accepted: the
-  grader compares guesses against it. A drawing-phase `timeout` still
-  ends the turn without one.
-- `grade` is accepted in `judging` *and* `reveal`, once per turn. During
-  reveal the live turn is already in `turns`, so both must be updated
-  together or they drift.
+- `set_intent` is accepted in `prep` only and is **required** before
+  `start_drawing`: the grader compares guesses against it, and it must
+  not change under the guessers. A `prep` `timeout` skips the turn (the
+  drawer is treated as absent); a `drawing` `timeout` ends it normally.
+- `end_drawing` is refused with `too_early` until `minDrawingMs` has run.
+  `earliestEndAt(state)` is the one definition of when; the client
+  imports it from `$shared/game/machine` to count "Done" down.
+- `grade` and `translate` are accepted in `judging` *and* `reveal`.
+  During reveal the live turn is already in `turns`, so both must be
+  updated together or they drift. `translate` ignores unknown guess ids
+  rather than refusing. Editing a guess resets its `translations`.
+- `Lang` and `LANGS` live in `src/game/types.ts` because guesses carry
+  text keyed by them; the client's `i18n.svelte.ts` re-exports them.
 - A turn with no guesses is settled `grading: 'done'` by `finishDrawing`;
   it never reaches `judging`, so nothing would otherwise grade it.
 - `project` hides `correctGuessId` from everyone until reveal, drawer
-  included.
+  included, and hides `intentTranslations` with `intent`. It adds
+  `answered` (who has a guess in) sorted by **id**, never by submission:
+  the guess list is in submission order and the two would pair up.
 
 ## Architecture of `src/room/`
 
@@ -132,12 +145,14 @@ re-arms the single alarm via `scheduleAlarm()`.
   collection, then re-arms.
 - Strokes never enter the reducer. Relay happens in `handleStroke`,
   only from the current drawer during `drawing`, never echoed to sender.
-- `maybeGrade()` fires the Gemini call on entering `judging` via
-  `waitUntil`, and `applyGrade` drops the result if the live turn moved on
-  meanwhile. `grader.ts` is pure fetch + parsing and is tested in node
-  (its own vitest project), not in workerd.
-- No `GEMINI_API_KEY` means every turn is `grading: 'unavailable'`. That
-  is the state local dev and the test suites run in.
+- `maybeGrade()` and `maybeTranslate()` fire their Gemini calls on
+  entering `judging` via `waitUntil`, and `applyGrade` / `applyTranslations`
+  drop the result if the live turn moved on meanwhile. `grader.ts` and
+  `translator.ts` are pure fetch + parsing over `gemini.ts` and are tested
+  in node (the `grader` vitest project), not in workerd.
+- No `GEMINI_API_KEY` means every turn is `grading: 'unavailable'` and
+  nothing is translated: every guess shows as typed. That is the state
+  local dev and the test suites run in.
 - The worker talks to the DO over internal URLs (`https://room/create`,
   `/info`, `/ws`, `/turns/:i/strokes`); the DO learns its room code from
   the `/create` body.
@@ -158,10 +173,16 @@ is no re-render, so no memoisation.
 - `lib/clock.svelte.ts` is one rAF loop for every countdown, corrected by
   the `now` the server stamps on each `state` message.
 - `lib/i18n.svelte.ts` is the other singleton: the player's own language
-  (en/fr/es/zh), a `Strings` dictionary per language, and `t.error(code)`
-  for server refusals. Every player in a room can be on a different one.
-  New user-visible text goes in `Strings` — all four languages, or it is a
-  type error. Nothing a player *types* is ever translated.
+  (en/fr/es/zh), a `Strings` dictionary per language, `t.error(code)` for
+  server refusals, and `t.read(text, translations)` for a guess or note
+  in the player's language with the original beneath when it differs.
+  Every player in a room can be on a different one. New user-visible text
+  goes in `Strings` — all four languages, or it is a type error. Player
+  text is translated only by the server (see `translator.ts`); the client
+  never sends the language anywhere.
+- `screens/Prep.svelte` is the turn's first screen (note field + Start for
+  the drawer, waiting for everyone else); `lib/Answered.svelte` is the
+  who-has-answered strip under the canvas during `drawing`.
 - `$shared/*` aliases to `src/*`, so the client imports `ProjectedState`
   and `ClientMessage` from the worker source. Protocol drift is a type
   error.
@@ -204,20 +225,25 @@ invariant with a recording fake 2D context — that logic lives in
 `lib/paint.ts` rather than `Canvas.svelte` precisely so it can be tested
 without a browser.
 
-`scripts/e2e.mjs` runs seven scenarios in real browsers against
-`wrangler dev`: a full game to the gallery, the drawing timer expiring
-untouched, judging timing out with no awards, a drawer vanishing mid-turn,
-a second round, the drawer being refused `end_drawing` until they say
-what they are drawing, three players in one room in three different
-languages, and an IME candidate key landing in the name field and the
-guess bar without submitting either form. Contexts are pinned to `locale: 'en-US'` so the other six read
-English whatever the machine is set to. Each scenario builds its own room, with short timers
-where it needs them. This has caught bugs that unit tests and typechecking
-did not; run it after changing anything in `web/` or the wire protocol.
+`scripts/e2e.mjs` runs nine scenarios in real browsers against
+`wrangler dev`: a full game to the gallery (including the drawer watching
+who has answered), the drawing timer expiring untouched, judging timing
+out with no awards, a drawer vanishing while deciding, a second round, the
+drawer being refused Start until they say what they are drawing, "Done"
+counting down the minimum drawing time, three players in one room in
+three different languages, and an IME candidate key landing in the name
+field, the note field and the guess bar without submitting any of them.
+Contexts are pinned to `locale: 'en-US'` so the other scenarios read
+English whatever the machine is set to. Each scenario builds its own
+room, with short timers where it needs them and `minDrawingMs: 0` unless
+it is the one testing it. This has caught bugs that unit tests and
+typechecking did not; run it after changing anything in `web/` or the
+wire protocol. `ELEPHANT_ONLY=<substring>` narrows it.
 
 `src/room/room.test.ts` runs in workerd via `cloudflare:test`. It uses a
 small `Client` class (typed inbox, `next(type)`, `stateWhere(pred)`) and
-fixtures `readyRoom()` / `startedRoom()`. Miniflare runs real DO alarms,
+fixtures `readyRoom()` / `prepRoom()` / `startedRoom()`, which default
+`minDrawingMs` to 0 so `finish()` need not wait. Miniflare runs real DO alarms,
 so tests with millisecond timers assert outcomes, not whether
 `runDurableObjectAlarm` returned true. Fixtures call `clear()` on
 inboxes; remember the server sends the stroke reset before the state.
@@ -236,12 +262,15 @@ not pick it.
 Including either would read as a gap where there is none.
 
 `src/game/machine.test.ts` is organised by event, with helpers at the top
-(`lobby()`, `drawing()`, `judging()`, `reveal()`, `roundEnd()`) that build
-fixtures by replaying events. `drawing(order)` searches seeds until the
-requested draw order appears, so tests can name drawers explicitly. `run()`
-throws on any error; `fails()` returns the error and asserts state
-identity. Add new behaviour test-first in the matching `describe` block
-and keep the docs' events table current.
+(`lobby()`, `prep()`, `drawing()`, `judging()`, `reveal()`, `roundEnd()`)
+that build fixtures by replaying events. `prep(order)` searches seeds
+until the requested draw order appears, so tests can name drawers
+explicitly; `drawing()` is `prep()` plus the note and `start_drawing`.
+Anything after the drawing phase is timed from `T1`, which is `T0` plus
+the minimum drawing time, and `quickTurn()` plays a later turn as fast
+as the rules allow. `run()` throws on any error; `fails()` returns the
+error and asserts state identity. Add new behaviour test-first in the
+matching `describe` block and keep the docs' events table current.
 
 ## Conventions
 

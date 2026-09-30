@@ -29,20 +29,24 @@ the game.
 2. **Identify.** Enter a name, pick an avatar, tap **Ready**.
 3. **Lobby.** The organizer sees who's ready and taps **Start** once at
    least three people are in.
-4. **Draw.** The drawer decides what to draw (free choice), optionally
-   types it in privately, and has 90 seconds. Strokes stream live to
-   everyone.
-5. **Guess.** Every other player types a guess. Guesses can be edited
+4. **Decide.** The drawer picks what to draw (free choice), types it in
+   privately, and taps **Start**. Only then does the 90-second clock begin.
+   They have 60 seconds to decide, or their turn is skipped.
+5. **Draw.** Strokes stream live to everyone. The drawer sees *who* has
+   answered — never what — so they know when to stop, and may end the
+   turn early once 30 seconds have run.
+6. **Guess.** Every other player types a guess. Guesses can be edited
    until the timer ends.
-6. **Judge.** Correctness is decided by an LLM comparing the guesses
+7. **Judge.** Correctness is decided by an LLM comparing the guesses
    against what the drawer said they were drawing. The drawer's only job
    is to pick their **favourite** answer. 2 points each, and one answer
-   can win both.
-7. **Reveal.** Everyone sees who wrote what, what the drawer meant, and
+   can win both. Every guess is shown to each player in their own
+   language.
+8. **Reveal.** Everyone sees who wrote what, what the drawer meant, and
    the updated leaderboard.
-8. **Pass the pen.** Next player draws. Late joiners are slotted at the
+9. **Pass the pen.** Next player draws. Late joiners are slotted at the
    end of the order.
-9. **Round end.** After everyone has drawn, the organizer picks
+10. **Round end.** After everyone has drawn, the organizer picks
    **New round** or **End game**. End game shows final standings and a
    gallery of every drawing with its winning captions.
 
@@ -77,11 +81,19 @@ Details and the motion vocabulary are in [DESIGN.md](DESIGN.md#client-look-and-f
 - **The same answer can win both**, for 4 points.
 - Correctness is graded by an LLM, not by the drawer. It compares each
   guess against the drawer's own note of what they drew, so the drawer
-  must write that note before they can finish drawing.
+  must write that note **before the clock starts**. They have 60 seconds
+  to write it; an idle drawer is skipped.
+- **The drawer must draw for at least 30 seconds** before they can end
+  the turn early. They see who has answered so they know when to.
 - **Guesses are graded on meaning, not language.** Everyone picks their
   own language, so one room routinely mixes them: a guess counts when it
   names the same thing the drawer wrote down, whatever language either is
   in. A different subject is still wrong, translated or not.
+- **Everyone reads every guess in their own language.** Once a turn's
+  guesses are final, the same model renders them, and the drawer's note,
+  into every language the app speaks; each phone shows its player's own,
+  with the original beneath when it differs. If that fails, everyone
+  reads the guesses as typed.
 - If grading fails or is not configured, the turn is recorded as ungraded
   and only the favourite scores. The game never blocks on it.
 - The drawer earns no points. Picking a favourite is the reward.
@@ -94,7 +106,9 @@ Details and the motion vocabulary are in [DESIGN.md](DESIGN.md#client-look-and-f
 | Prompts or free draw? | **Free draw.** The drawer must note what they drew — the grader needs it, and it is shown at the reveal. |
 | Who decides "correct"? | **An LLM** (Gemini), server-side. The drawer only picks a favourite, so their taste is the only thing they arbitrate. |
 | Several guesses correct? | **First submitted wins**, keeping the payout at 4 points a turn. |
-| Mixed languages in one room? | **Yes, per player.** Each player chooses their own interface language; the drawing is the shared medium and the grader accepts a correct guess in any language. Nothing is translated for anyone — players read each other's guesses as written. |
+| Mixed languages in one room? | **Yes, per player.** Each player chooses their own interface language; the drawing is the shared medium and the grader accepts a correct guess in any language. Guesses and the drawer's note are translated server-side into every supported language, so each player reads the room in their own, with the original shown beneath. |
+| When does the clock start? | **When the drawer taps Start**, after writing their note. Deciding has its own 60-second limit; a drawer who never writes one is skipped. |
+| Can the drawer end early? | **After 30 seconds.** They see who has answered — not what — so they know when everyone is in. |
 | Drawer incentive? | **None.** |
 | Platform | **Mobile web / PWA.** No native apps, no TV view in v1. |
 | Backend | **Cloudflare Workers + Durable Objects.** One DO per room. See [DESIGN.md](DESIGN.md). |

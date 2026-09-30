@@ -8,6 +8,7 @@ import { DEFAULT_CONFIG } from '../game/config'
 import { apply, createGame, nextAlarmAt, project } from '../game/machine'
 import type { GameConfig, GameEvent, GameState, PlayerId } from '../game/types'
 import { type GradeGuess, gradeGuesses } from './grader'
+import { type TranslateItem, type TranslateOutcome, translateTurn } from './translator'
 import {
   CLOSE_LEFT,
   CLOSE_REPLACED,
@@ -51,6 +52,8 @@ export class RoomDO extends DurableObject<Env> {
   private strokesTurn = -1
   /** The turn index grading is already running for, so it starts only once. */
   private gradingTurn: number | null = null
+  /** Likewise for translation. */
+  private translatingTurn: number | null = null
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -309,6 +312,7 @@ export class RoomDO extends DurableObject<Env> {
     this.broadcastState()
     await this.scheduleAlarm()
     this.maybeGrade()
+    this.maybeTranslate()
   }
 
   /**
@@ -353,6 +357,37 @@ export class RoomDO extends DurableObject<Env> {
       correctGuessId: outcome.correctGuessId,
       ok: outcome.ok,
     })
+    if (!r.error) await this.commit(r.state)
+  }
+
+  /**
+   * Render the turn's text into every language once it reaches judging,
+   * when the guesses are final and about to be shown to everyone. Runs
+   * alongside grading; a missing key just leaves the guesses as typed.
+   */
+  private maybeTranslate(): void {
+    const game = this.game
+    if (!game?.turn || game.phase !== 'judging') return
+
+    const turnIdx = liveTurnIndex(game)
+    if (this.translatingTurn === turnIdx) return
+    this.translatingTurn = turnIdx
+
+    const key = this.env.GEMINI_API_KEY
+    if (!key) return
+    const guesses: TranslateItem[] = game.turn.guesses.map((g) => ({ id: g.id, text: g.text }))
+    this.ctx.waitUntil(
+      translateTurn(key, game.turn.intent, guesses, game.config.gradingMs, this.env.GEMINI_MODEL).then((outcome) =>
+        outcome ? this.applyTranslations(turnIdx, outcome) : undefined,
+      ),
+    )
+  }
+
+  /** Apply a rendering, but only if it still belongs to the live turn. */
+  private async applyTranslations(turnIdx: number, outcome: TranslateOutcome): Promise<void> {
+    const game = this.game
+    if (!game || liveTurnIndex(game) !== turnIdx) return
+    const r = apply(game, { type: 'translate', now: Date.now(), guesses: outcome.guesses, intent: outcome.intent })
     if (!r.error) await this.commit(r.state)
   }
 
@@ -455,6 +490,7 @@ export class RoomDO extends DurableObject<Env> {
 /** Index in `turns` that the live turn has (reveal) or will have (drawing/judging). */
 function liveTurnIndex(game: GameState): number {
   switch (game.phase) {
+    case 'prep':
     case 'drawing':
     case 'judging':
       return game.turns.length
@@ -491,10 +527,11 @@ function toGameEvent(msg: Record<string, unknown>, playerId: PlayerId, now: numb
       if (favoriteGuessId === null) return 'invalid message: favoriteGuessId required'
       return { type: 'judge', now, playerId, favoriteGuessId }
     }
+    case 'start_drawing':
     case 'end_drawing':
     case 'advance':
     case 'end_game':
-      return { type: msg['type'] as 'end_drawing' | 'advance' | 'end_game', now, playerId }
+      return { type: msg['type'] as 'start_drawing' | 'end_drawing' | 'advance' | 'end_game', now, playerId }
     default:
       return `unknown message type: ${String(msg['type'])}`
   }
@@ -528,7 +565,9 @@ function sanitizeConfig(c: Partial<GameConfig> | undefined): Partial<GameConfig>
   const d = DEFAULT_CONFIG
   const hour = 3_600_000
   return {
+    prepMs: clamp(c.prepMs, 1, hour, d.prepMs),
     drawingMs: clamp(c.drawingMs, 1, hour, d.drawingMs),
+    minDrawingMs: clamp(c.minDrawingMs, 0, hour, d.minDrawingMs),
     judgingMs: clamp(c.judgingMs, 1, hour, d.judgingMs),
     revealMs: clamp(c.revealMs, 1, hour, d.revealMs),
     graceMs: clamp(c.graceMs, 1, hour, d.graceMs),

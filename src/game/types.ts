@@ -1,11 +1,26 @@
 export type PlayerId = string
 export type GuessId = string
 
-export type Phase = 'lobby' | 'drawing' | 'judging' | 'reveal' | 'round_end' | 'ended'
+export type Phase = 'lobby' | 'prep' | 'drawing' | 'judging' | 'reveal' | 'round_end' | 'ended'
+
+/**
+ * The languages the client can show. Shared with the client's dictionary and
+ * with the translator, which renders every guess into each of them so a
+ * player reads the room in whichever one they picked.
+ */
+export const LANGS = ['en', 'fr', 'es', 'zh'] as const
+export type Lang = (typeof LANGS)[number]
+
+/** One piece of player text in every language the client can show. */
+export type Translations = Partial<Record<Lang, string>>
 
 export interface GameConfig {
+  /** How long the drawer has to say what they will draw before the turn is skipped, ms. */
+  prepMs: number
   /** Drawing timer, ms. */
   drawingMs: number
+  /** How long the drawer must keep drawing before they may finish early, ms. */
+  minDrawingMs: number
   /** Judging timer, ms. Expiry awards nothing. */
   judgingMs: number
   /** Reveal screen duration, ms. */
@@ -41,6 +56,12 @@ export interface Guess {
   playerId: PlayerId
   text: string
   submittedAt: number
+  /**
+   * `text` in every language the client can show, once the translator has
+   * been through the turn. Null until then, or if translation failed, in
+   * which case everyone reads the guess as typed.
+   */
+  translations: Translations | null
 }
 
 /**
@@ -53,11 +74,13 @@ export interface Turn {
   round: number
   drawerId: PlayerId
   /**
-   * What the drawer says they are drawing. Required before they may finish,
-   * because the grader has nothing to compare guesses against without it.
-   * Private until the reveal.
+   * What the drawer says they are drawing. Required before the timer will
+   * start, because the grader has nothing to compare guesses against
+   * without it. Private until the reveal.
    */
   intent: string | null
+  /** `intent` in every language, filled in alongside the guesses' translations. */
+  intentTranslations: Translations | null
   /** In submission order. Editing a guess moves it to the end. */
   guesses: Guess[]
   /** Chosen by the grader, not the drawer. Hidden until the reveal. */
@@ -103,6 +126,8 @@ export type GameEvent =
   | (Base & { type: 'set_ready'; playerId: PlayerId; ready: boolean })
   | (Base & { type: 'start_game'; playerId: PlayerId; seed: number })
   | (Base & { type: 'set_intent'; playerId: PlayerId; text: string })
+  /** The drawer has said what they will draw: start the clock. */
+  | (Base & { type: 'start_drawing'; playerId: PlayerId })
   | (Base & { type: 'submit_guess'; playerId: PlayerId; text: string })
   | (Base & { type: 'end_drawing'; playerId: PlayerId })
   | (Base & { type: 'judge'; playerId: PlayerId; favoriteGuessId: GuessId })
@@ -112,6 +137,11 @@ export type GameEvent =
    * grading could not be carried out at all.
    */
   | (Base & { type: 'grade'; correctGuessId: GuessId | null; ok: boolean })
+  /**
+   * The translator's rendering of the turn's text, applied by the transport.
+   * Keyed by guess id; ids that no longer match a guess are ignored.
+   */
+  | (Base & { type: 'translate'; guesses: Record<GuessId, Translations>; intent: Translations | null })
   | (Base & { type: 'advance'; playerId: PlayerId })
   | (Base & { type: 'next_round'; playerId: PlayerId; seed: number })
   | (Base & { type: 'end_game'; playerId: PlayerId })
@@ -138,12 +168,14 @@ export type ErrorCode =
   | 'unready_outside_lobby'
   | 'not_organizer'
   | 'need_more_players'
+  | 'not_prep'
   | 'not_drawing'
   | 'not_drawer'
   | 'drawer_cannot_guess'
   | 'not_ready'
   | 'invalid_guess'
   | 'intent_required'
+  | 'too_early'
   | 'not_judging'
   | 'unknown_guess'
   | 'nothing_to_grade'
@@ -166,11 +198,19 @@ export interface ProjectedGuess {
   playerId: PlayerId | null
   text: string
   submittedAt: number
+  translations: Translations | null
 }
 
-export interface ProjectedTurn extends Omit<Turn, 'guesses' | 'intent'> {
+export interface ProjectedTurn extends Omit<Turn, 'guesses' | 'intent' | 'intentTranslations'> {
   intent: string | null
+  intentTranslations: Translations | null
   guesses: ProjectedGuess[]
+  /**
+   * Who has a guess in, whatever it says. Visible to everyone, drawer
+   * included, so they can tell when to stop; sorted by id rather than by
+   * submission so it cannot be lined up against the anonymous guess list.
+   */
+  answered: PlayerId[]
 }
 
 export interface ProjectedState extends Omit<GameState, 'turn' | 'turns' | 'nextGuessSeq'> {

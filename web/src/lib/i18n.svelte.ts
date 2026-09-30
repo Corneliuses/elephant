@@ -3,18 +3,19 @@
  *
  * Language is a purely local choice: it never reaches the server and no
  * other player sees it. What crosses the wire — names, guesses, the drawer's
- * note — stays exactly as it was typed, because the drawing is the shared
- * medium and half the fun is reading a guess you only half understand. The
- * grader is the one thing that has to cope with the mixture, and it does that
- * by judging meaning rather than wording (see src/room/grader.ts).
+ * note — is stored exactly as typed; the server also renders each turn's
+ * guesses and note into every language it knows (see src/room/translator.ts),
+ * and `read` below picks this player's one out, so each phone shows the room
+ * in its own language without the server ever learning which that is.
  *
  * The `.svelte.ts` extension is what lets `$state` work outside a component.
  * Read `t.s.<key>` in markup and the text re-renders when the picker changes.
  */
+import { LANGS, type Lang, type Translations } from '$shared/game/types'
 import type { WireErrorCode } from '$shared/room/protocol'
 
-export const LANGS = ['en', 'fr', 'es', 'zh'] as const
-export type Lang = (typeof LANGS)[number]
+export { LANGS }
+export type { Lang }
 
 /** Each language named in itself. Never translated — that is the point. */
 export const LANG_NAMES: Record<Lang, string> = {
@@ -65,19 +66,26 @@ interface Strings {
   imReady: string
   startGame: string
   waitingToStart: string
+  // Prep
+  yourTurn: string
+  isDeciding: (name: string) => string
+  whatWillYouDraw: string
+  drawAnything: string
+  prepHint: string
+  intentPlaceholder: string
+  intentLabel: string
+  startDrawing: string
+  sayWhatFirst: string
   // Drawing
   youAreDrawing: string
   isDrawing: (name: string) => string
   guessesIn: (n: number) => string
-  drawAnything: string
   noGuessesYet: string
   colour: (c: string) => string
   brushSize: string
   clearCanvas: string
-  intentPlaceholder: string
-  intentLabel: string
   doneDrawing: string
-  sayWhatFirst: string
+  doneIn: (seconds: number) => string
   changeGuessPlaceholder: string
   whatIsIt: string
   yourGuess: string
@@ -121,6 +129,7 @@ interface Strings {
   errNameNeeded: string
   errGuessNeeded: string
   errIntentNeeded: string
+  errTooEarly: string
   errNeedPlayers: (n: number) => string
   errGameOver: string
   errLostPlace: string
@@ -155,18 +164,24 @@ const en: Strings = {
   imReady: "I'm ready",
   startGame: 'Start game',
   waitingToStart: 'Waiting for the organizer to start…',
+  yourTurn: 'Your turn',
+  isDeciding: (name) => `${name} is deciding what to draw…`,
+  whatWillYouDraw: 'What will you draw?',
+  drawAnything: 'Draw anything. They guess.',
+  prepHint: 'Only you see this note. The clock starts when you tap Start.',
+  intentPlaceholder: 'What is it?',
+  intentLabel: 'What you are drawing',
+  startDrawing: 'Start drawing',
+  sayWhatFirst: 'Say what it is first',
   youAreDrawing: 'You are drawing',
   isDrawing: (name) => `${name} is drawing`,
   guessesIn: (n) => `${n} guess${n === 1 ? '' : 'es'} in`,
-  drawAnything: 'Draw anything. They guess.',
   noGuessesYet: 'No guesses yet',
   colour: (c) => `Colour ${c}`,
   brushSize: 'Brush size',
   clearCanvas: 'Clear the canvas',
-  intentPlaceholder: 'What is it? (needed, and only you see it)',
-  intentLabel: 'What you are drawing',
   doneDrawing: 'Done drawing',
-  sayWhatFirst: 'Say what it is first',
+  doneIn: (s) => `Done in ${s} s`,
   changeGuessPlaceholder: 'Change your guess…',
   whatIsIt: 'What is it?',
   yourGuess: 'Your guess',
@@ -204,6 +219,7 @@ const en: Strings = {
   errNameNeeded: 'Pick a name first.',
   errGuessNeeded: 'Type a guess first.',
   errIntentNeeded: 'Say what you are drawing first.',
+  errTooEarly: 'Keep drawing a little longer.',
   errNeedPlayers: (n) => `Need ${n} ready players.`,
   errGameOver: 'The game is over.',
   errLostPlace: 'You lost your place in this room.',
@@ -238,18 +254,24 @@ const fr: Strings = {
   imReady: 'Je suis prêt',
   startGame: 'Commencer',
   waitingToStart: "En attente de l'organisateur…",
+  yourTurn: 'À vous',
+  isDeciding: (name) => `${name} réfléchit à quoi dessiner…`,
+  whatWillYouDraw: "Qu'allez-vous dessiner ?",
+  drawAnything: 'Dessinez ce que vous voulez. À eux de deviner.',
+  prepHint: 'Vous seul voyez cette note. Le chrono démarre quand vous appuyez sur Commencer.',
+  intentPlaceholder: "C'est quoi ?",
+  intentLabel: 'Ce que vous dessinez',
+  startDrawing: 'Commencer à dessiner',
+  sayWhatFirst: "Dites d'abord ce que c'est",
   youAreDrawing: 'À vous de dessiner',
   isDrawing: (name) => `${name} dessine`,
   guessesIn: (n) => `${n} proposition${n > 1 ? 's' : ''}`,
-  drawAnything: 'Dessinez ce que vous voulez. À eux de deviner.',
   noGuessesYet: 'Aucune proposition',
   colour: (c) => `Couleur ${c}`,
   brushSize: 'Taille du pinceau',
   clearCanvas: 'Effacer le dessin',
-  intentPlaceholder: "C'est quoi ? (obligatoire, vous seul le voyez)",
-  intentLabel: 'Ce que vous dessinez',
   doneDrawing: "J'ai fini",
-  sayWhatFirst: "Dites d'abord ce que c'est",
+  doneIn: (s) => `Fini dans ${s} s`,
   changeGuessPlaceholder: 'Changer de réponse…',
   whatIsIt: "C'est quoi ?",
   yourGuess: 'Votre réponse',
@@ -287,6 +309,7 @@ const fr: Strings = {
   errNameNeeded: 'Choisissez un nom.',
   errGuessNeeded: 'Écrivez une réponse.',
   errIntentNeeded: "Dites d'abord ce que vous dessinez.",
+  errTooEarly: 'Dessinez encore un peu.',
   errNeedPlayers: (n) => `Il faut ${n} joueurs prêts.`,
   errGameOver: 'La partie est terminée.',
   errLostPlace: 'Vous avez perdu votre place dans cette salle.',
@@ -321,18 +344,24 @@ const es: Strings = {
   imReady: 'Estoy listo',
   startGame: 'Empezar',
   waitingToStart: 'Esperando a que empiece el organizador…',
+  yourTurn: 'Te toca',
+  isDeciding: (name) => `${name} está pensando qué dibujar…`,
+  whatWillYouDraw: '¿Qué vas a dibujar?',
+  drawAnything: 'Dibuja lo que quieras. Ellos adivinan.',
+  prepHint: 'Solo tú ves esta nota. El reloj empieza cuando toques Empezar.',
+  intentPlaceholder: '¿Qué es?',
+  intentLabel: 'Lo que estás dibujando',
+  startDrawing: 'Empezar a dibujar',
+  sayWhatFirst: 'Di primero qué es',
   youAreDrawing: 'Te toca dibujar',
   isDrawing: (name) => `${name} está dibujando`,
   guessesIn: (n) => `${n} respuesta${n === 1 ? '' : 's'}`,
-  drawAnything: 'Dibuja lo que quieras. Ellos adivinan.',
   noGuessesYet: 'Aún no hay respuestas',
   colour: (c) => `Color ${c}`,
   brushSize: 'Grosor del pincel',
   clearCanvas: 'Borrar el dibujo',
-  intentPlaceholder: '¿Qué es? (obligatorio, solo lo ves tú)',
-  intentLabel: 'Lo que estás dibujando',
   doneDrawing: 'He terminado',
-  sayWhatFirst: 'Di primero qué es',
+  doneIn: (s) => `Listo en ${s} s`,
   changeGuessPlaceholder: 'Cambia tu respuesta…',
   whatIsIt: '¿Qué es?',
   yourGuess: 'Tu respuesta',
@@ -370,6 +399,7 @@ const es: Strings = {
   errNameNeeded: 'Elige un nombre.',
   errGuessNeeded: 'Escribe una respuesta.',
   errIntentNeeded: 'Di primero qué estás dibujando.',
+  errTooEarly: 'Sigue dibujando un poco más.',
   errNeedPlayers: (n) => `Hacen falta ${n} jugadores listos.`,
   errGameOver: 'La partida ha terminado.',
   errLostPlace: 'Has perdido tu sitio en esta sala.',
@@ -404,18 +434,24 @@ const zh: Strings = {
   imReady: '我准备好了',
   startGame: '开始',
   waitingToStart: '等待房主开始…',
+  yourTurn: '轮到你了',
+  isDeciding: (name) => `${name} 正在想画什么…`,
+  whatWillYouDraw: '你要画什么？',
+  drawAnything: '随便画，让他们猜。',
+  prepHint: '这条备注只有你能看到。点“开始”后才开始计时。',
+  intentPlaceholder: '这是什么？',
+  intentLabel: '你在画什么',
+  startDrawing: '开始画',
+  sayWhatFirst: '先说说这是什么',
   youAreDrawing: '轮到你画',
   isDrawing: (name) => `${name} 正在画`,
   guessesIn: (n) => `已有 ${n} 个猜测`,
-  drawAnything: '随便画，让他们猜。',
   noGuessesYet: '还没有人猜',
   colour: (c) => `颜色 ${c}`,
   brushSize: '笔刷粗细',
   clearCanvas: '清空画布',
-  intentPlaceholder: '这是什么？（必填，只有你能看到）',
-  intentLabel: '你在画什么',
   doneDrawing: '画好了',
-  sayWhatFirst: '先说说这是什么',
+  doneIn: (s) => `${s} 秒后可以结束`,
   changeGuessPlaceholder: '换一个猜测…',
   whatIsIt: '这是什么？',
   yourGuess: '你的猜测',
@@ -453,6 +489,7 @@ const zh: Strings = {
   errNameNeeded: '请先取个名字。',
   errGuessNeeded: '请先写下你的猜测。',
   errIntentNeeded: '请先说说你在画什么。',
+  errTooEarly: '再多画一会儿。',
   errNeedPlayers: (n) => `需要 ${n} 名准备好的玩家。`,
   errGameOver: '游戏已经结束。',
   errLostPlace: '你在这个房间里的位置已经失效。',
@@ -528,6 +565,8 @@ class I18n {
         return s.errGuessNeeded
       case 'intent_required':
         return s.errIntentNeeded
+      case 'too_early':
+        return s.errTooEarly
       case 'need_more_players':
         return s.errNeedPlayers(minPlayers)
       case 'game_ended':
@@ -537,6 +576,18 @@ class I18n {
       default:
         return s.errGeneric
     }
+  }
+
+  /**
+   * A player's text as this player should read it: in their own language
+   * when the server has rendered it there, as typed otherwise. The original
+   * comes back too when it differs, so it can be shown beneath — a
+   * translation is a reading aid, not a replacement for what was written.
+   */
+  read(text: string, translations: Translations | null | undefined): { text: string; original: string | null } {
+    const shown = translations?.[this.lang]
+    if (!shown || shown === text) return { text, original: null }
+    return { text: shown, original: text }
   }
 
   #applyToDocument(): void {

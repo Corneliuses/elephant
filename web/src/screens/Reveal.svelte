@@ -9,6 +9,7 @@
   const game = $derived(room.game!)
   const turn = $derived(game.turn!)
   const drawer = $derived(game.players[turn.drawerId])
+  const intent = $derived(turn.intent ? t.read(turn.intent, turn.intentTranslations) : null)
 
   function badgeFor(id: string) {
     const c = id === turn.correctGuessId
@@ -60,8 +61,9 @@
 
   {#if showIntent}
     <p class="intent" in:scale={{ duration: 340, start: 0.8 }}>
-      {#if turn.intent}
-        {t.s.itWas} <strong>{turn.intent}</strong>
+      {#if intent}
+        {t.s.itWas} <strong>{intent.text}</strong>
+        {#if intent.original}<span class="orig">{intent.original}</span>{/if}
       {:else}
         {t.s.neverSaid(drawer?.name ?? '')}
       {/if}
@@ -101,6 +103,7 @@
   .list { display: grid; gap: 0.5rem; }
   .intent { margin: 0; text-align: center; font-size: 1.15rem; font-weight: 700; }
   .intent strong { font-weight: 900; }
+  .orig { display: block; font-size: 0.85rem; font-weight: 600; color: var(--ink-soft); }
   .verdict { margin: 0; text-align: center; font-size: 0.85rem; font-weight: 800; color: var(--ink-soft); }
   .spacer { flex: 1; }
 </style>

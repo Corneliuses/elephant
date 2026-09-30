@@ -1,7 +1,9 @@
 import type { GameConfig } from './types'
 
 export const DEFAULT_CONFIG: GameConfig = {
+  prepMs: 60_000,
   drawingMs: 90_000,
+  minDrawingMs: 30_000,
   judgingMs: 60_000,
   revealMs: 8_000,
   graceMs: 15_000,
