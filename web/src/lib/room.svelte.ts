@@ -6,6 +6,7 @@
  * plain module. A single instance is exported at the bottom — no provider,
  * no context, no store subscriptions. Components import it and read it.
  */
+import { DEFAULT_CONFIG } from '$shared/game/config'
 import type { PlayerId, ProjectedState } from '$shared/game/types'
 import { CLOSE_LEFT, CLOSE_ROOM_GONE, CLOSE_UNAUTHORIZED } from '$shared/room/protocol'
 import type { ClientMessage, ServerMessage, Stroke } from '$shared/room/protocol'
@@ -205,7 +206,8 @@ class Room {
         }
         break
       case 'error':
-        this.error = t.error(msg.code, this.game?.config.minPlayers ?? 3)
+        // A refused join arrives before any state, so the defaults stand in.
+        this.error = t.error(msg.code, this.game?.config.minPlayers ?? DEFAULT_CONFIG.minPlayers, this.game?.config.maxPlayers ?? DEFAULT_CONFIG.maxPlayers)
         break
     }
   }

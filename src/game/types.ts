@@ -29,6 +29,8 @@ export interface GameConfig {
   graceMs: number
   /** Minimum ready+connected players to start a game or a new round. */
   minPlayers: number
+  /** Most players a room seats, connected or not. A `join` beyond it is refused. */
+  maxPlayers: number
   /** Max length of a guess after trimming. */
   guessMaxLen: number
   /** Max length of a name after trimming. */
@@ -161,6 +163,7 @@ export type GameEvent =
 export type ErrorCode =
   | 'game_ended'
   | 'already_joined'
+  | 'room_full'
   | 'invalid_name'
   | 'invalid_avatar'
   | 'unknown_player'

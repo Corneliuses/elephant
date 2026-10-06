@@ -162,6 +162,11 @@ function clip(text: string, max: number): string {
 
 function join(state: GameState, ev: Ev<'join'>): ApplyResult {
   if (state.players[ev.playerId]) return fail(state, 'already_joined', 'player already joined')
+  // Seats count whoever is in the room, connected or not: a player who
+  // dropped may come back, and `leave` is what frees one.
+  if (Object.keys(state.players).length >= state.config.maxPlayers) {
+    return fail(state, 'room_full', `room is full (${state.config.maxPlayers} players)`)
+  }
   const name = clean(ev.name)
   if (len(name) === 0 || len(name) > state.config.nameMaxLen) return fail(state, 'invalid_name', 'invalid name')
   const avatar = clean(ev.avatar)

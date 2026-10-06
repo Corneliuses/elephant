@@ -97,7 +97,8 @@ Details and the motion vocabulary are in [DESIGN.md](DESIGN.md#client-look-and-f
 - If grading fails or is not configured, the turn is recorded as ungraded
   and only the favourite scores. The game never blocks on it.
 - The drawer earns no points. Picking a favourite is the reward.
-- Minimum 3 players to start. No hard maximum; UI is tuned for ≤12.
+- Minimum 3 players to start, maximum 12 in a room (`maxPlayers`): the
+  roster, leaderboard and gallery are laid out for that many on a phone.
 
 ## Decisions already made
 

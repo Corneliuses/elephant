@@ -8,6 +8,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   revealMs: 8_000,
   graceMs: 15_000,
   minPlayers: 3,
+  maxPlayers: 12,
   guessMaxLen: 100,
   nameMaxLen: 24,
   correctPoints: 2,

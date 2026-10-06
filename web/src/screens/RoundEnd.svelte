@@ -22,8 +22,9 @@
     {/if}
   </header>
 
-  <Leaderboard players={room.ranked} />
-
+  <div class="board">
+    <Leaderboard players={room.ranked} />
+  </div>
   <div class="spacer"></div>
 
   {#if room.isOrganizer}
@@ -44,6 +45,8 @@
   .kicker { margin: 0; font-weight: 900; text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink-soft); font-size: 0.8rem; }
   .winner { display: grid; justify-items: center; gap: 0.2rem; }
   .face { font-size: 3.5rem; animation: rock 2.4s ease-in-out infinite; }
+  /* Twelve rows outgrow a phone: the board scrolls, the buttons stay put. */
+  .board { min-height: 0; overflow-y: auto; flex: 0 1 auto; }
   .spacer { flex: 1; }
   .note { margin: 0; text-align: center; font-weight: 800; color: var(--ink-soft); }
   @keyframes rock {

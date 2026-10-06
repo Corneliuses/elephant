@@ -55,7 +55,7 @@
     <LangPicker />
   </header>
 
-  <div class="roster">
+  <div class="roster" class:dense={room.players.length > 6}>
     {#each room.players as player (player.id)}
       <div animate:flip={{ duration: 320 }} in:fly={{ y: 14, duration: 260 }} out:scale={{ duration: 160 }}>
         <PlayerChip {player} crown={player.id === game.organizerId} />
@@ -102,7 +102,14 @@
   .letters { font-size: 2.6rem; font-weight: 900; letter-spacing: 0.28em; text-indent: 0.28em; }
   .hint { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.55; }
 
-  .roster { display: grid; gap: 0.5rem; }
+  /*
+   * Twelve chips do not fit above the buttons on a phone. The roster is the
+   * part that gives: it shrinks (min-height: 0 lets a flex item do that) and
+   * scrolls, so a newcomer always sees "I'm ready" and the organizer "Start".
+   * Past six players it goes to two columns so most of the room still shows.
+   */
+  .roster { display: grid; gap: 0.5rem; align-content: start; min-height: 0; overflow-y: auto; flex: 0 1 auto; }
+  .roster.dense { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .spacer { flex: 1; }
   footer { display: grid; gap: 0.7rem; }
   .count { margin: 0; text-align: center; font-weight: 800; color: var(--ink-soft); }

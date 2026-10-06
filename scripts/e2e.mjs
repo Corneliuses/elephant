@@ -457,6 +457,41 @@ await run('four languages in one room at once', async () => {
   log(`  drawer prompted "${prompt}"; guessers waiting in ${waiting.join(' / ')}`)
 })
 
+await run('twelve players fit in a lobby on a phone, and a thirteenth is turned away', async () => {
+  // The server never minded a crowd; the lobby did. Past four or five chips
+  // the roster pushed "I'm ready" and "Start game" off the bottom of a
+  // phone, with nothing to scroll, which read as "only four can join".
+  const code = await createRoom()
+  const names = ['Ada', 'Bo', 'Cy', 'Dee', 'Eve', 'Fay', 'Gus', 'Hal', 'Ida', 'Jo', 'Kim', 'Lou']
+  const by = {}
+  for (const name of names) by[name] = await joinAs(await newPage(), code, name)
+  const organizer = by.Ada
+  await organizer.waitForFunction((n) => document.querySelectorAll('.roster .chip').length === n, names.length, { timeout: 10000 })
+
+  // Both buttons are on screen without scrolling, for the first and the last to arrive.
+  const inView = (page, name) =>
+    page.getByRole('button', { name }).evaluate((el) => {
+      const r = el.getBoundingClientRect()
+      return r.top >= 0 && r.bottom <= innerHeight
+    })
+  assert(await inView(organizer, 'Start game'), 'the organizer cannot reach Start with twelve players')
+  assert(await inView(organizer, /I'm ready/), 'the organizer cannot reach Ready with twelve players')
+  assert(await inView(by.Lou, /I'm ready/), 'the twelfth player cannot reach Ready')
+  log('  twelve chips, and the buttons still in reach')
+
+  // Every seat taken: the next player is told so and stays on the join screen.
+  const extra = await newPage()
+  await extra.goto(`${BASE}/g/${code}`)
+  await extra.getByLabel('Your name').fill('Max')
+  await extra.getByRole('button', { name: 'Join the room' }).click()
+  await extra.getByRole('alert').filter({ hasText: /full/ }).waitFor({ timeout: 10000 })
+  await extra.waitForTimeout(300)
+  assert(await extra.getByLabel('Your name').isVisible(), 'the thirteenth player left the join screen')
+  const info = await (await fetch(`${BASE}/api/rooms/${code}`)).json()
+  assert(info.playerCount === 12, `server seated ${info.playerCount}`)
+  log('  the thirteenth was told the room is full')
+})
+
 await run('an IME candidate key does not submit the form behind it', async () => {
   // The Enter that picks a Chinese candidate is the same Enter that submits
   // the form the field sits in. Take the name field first: it is the one a

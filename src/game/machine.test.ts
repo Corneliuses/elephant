@@ -218,6 +218,25 @@ describe('join', () => {
     expect(fails(s, join('z'))).toMatch(/ended/)
   })
 
+  it('seats players up to the maximum and refuses the next one', () => {
+    let s = createGame('ABCD')
+    for (let i = 0; i < CFG.maxPlayers; i++) s = run(s, join(`p${i}`))
+    expect(Object.keys(s.players)).toHaveLength(CFG.maxPlayers)
+    expect(fails(s, join('one-too-many'))).toMatch(/full/)
+    expect(code(s, join('one-too-many'))).toBe('room_full')
+  })
+
+  it('counts a disconnected player as seated, and a departed one as not', () => {
+    let s = createGame('ABCD', { maxPlayers: 3 })
+    s = run(s, join('a'), join('b'), join('c'))
+    // Dropped, not gone: they may come back, so their seat is kept.
+    s = run(s, { type: 'disconnect', now: T0, playerId: 'c' })
+    expect(fails(s, join('d'))).toMatch(/full/)
+    // Left for good: the seat is free again.
+    s = run(s, { type: 'leave', now: T0, playerId: 'c' })
+    expect(fails(s, join('d'))).toBeUndefined()
+  })
+
   it('does not put a mid-game joiner into the draw order until they are ready', () => {
     const s = run(prep(), join('z', T0 + 50))
     expect(s.players['z']).toBeDefined()
@@ -1219,6 +1238,7 @@ describe('error codes', () => {
 
     const cases: [GameState, GameEvent, ErrorCode][] = [
       [lob, join('a'), 'already_joined'],
+      [{ ...lob, config: { ...lob.config, maxPlayers: Object.keys(lob.players).length } }, join('z'), 'room_full'],
       [lob, { type: 'join', now: T0, playerId: 'z', name: ' ', avatar: '🐘' }, 'invalid_name'],
       [lob, { type: 'join', now: T0, playerId: 'z', name: 'Zoé', avatar: ' ' }, 'invalid_avatar'],
       [lob, ready('nobody'), 'unknown_player'],

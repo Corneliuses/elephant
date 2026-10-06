@@ -312,6 +312,16 @@ describe('upgradeStoredGame', () => {
     expect(g.config.judgingMs).toBe(DEFAULT_CONFIG.judgingMs)
   })
 
+  it('gives a room from before the seat limit the default one', () => {
+    const g = upgradeStoredGame(old())
+    expect(g.config.maxPlayers).toBe(DEFAULT_CONFIG.maxPlayers)
+  })
+
+  it('never sets the ceiling under the floor', () => {
+    const g = upgradeStoredGame({ ...old(), config: { ...old().config, minPlayers: 20, maxPlayers: 5 } })
+    expect(g.config.maxPlayers).toBe(20)
+  })
+
   it('gives old turns and guesses the translation fields a fresh one has', () => {
     const g = upgradeStoredGame(old())
     expect(g.turn!.intentTranslations).toBeNull()
@@ -373,6 +383,25 @@ describe('join', () => {
     // must not be handed the English message beside it.
     expect(e.code).toBe('invalid_name')
     expect(a.has('welcome')).toBe(false)
+  })
+
+  it('refuses the player after the last seat, without welcoming them', async () => {
+    const code = await createRoom({ config: { maxPlayers: 3 } })
+    for (const name of ['A', 'B', 'C']) await (await connect(code)).join(name)
+    const d = await connect(code)
+    d.send({ type: 'join', name: 'D', avatar: 'x' })
+    const e = await d.next('error')
+    expect(e.code).toBe('room_full')
+    expect(d.has('welcome')).toBe(false)
+    const info = (await (await roomInfo(code)).json()) as RoomInfo
+    expect(info.playerCount).toBe(3)
+  })
+
+  it('seats a dozen players by default', async () => {
+    const code = await createRoom()
+    for (let i = 0; i < DEFAULT_CONFIG.maxPlayers; i++) await (await connect(code)).join(`P${i}`)
+    const info = (await (await roomInfo(code)).json()) as RoomInfo
+    expect(info.playerCount).toBe(12)
   })
 
   it('tags transport-level refusals too', async () => {

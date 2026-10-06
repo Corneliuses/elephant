@@ -38,7 +38,7 @@ npm run dev                               # wrangler dev (worker + DO + built as
 npm run dev:web                           # vite, :5173, proxies /api to :8787
 npm run build                             # vite build -> web/dist (deploy needs this first)
 npm run check:web                         # svelte-check
-npm run e2e                               # nine scenarios in 3 browser contexts; needs `npm run dev`
+npm run e2e                               # ten scenarios in real browsers; needs `npm run dev`
 ELEPHANT_ONLY=languages npm run e2e       # just the scenarios whose name contains that
 node scripts/icons.mjs                    # regenerate PWA icons after changing the mark
 ```
@@ -93,6 +93,9 @@ Rules that are easy to get wrong when extending:
 - Late joiners are added to `players` on `join` but enter `drawOrder` only
   when they `set_ready` during a live phase. Only ready players may guess.
   `set_ready(false)` is lobby-only.
+- A room seats `maxPlayers` (12). `join` counts everyone in `players`,
+  disconnected included, since they may reconnect; only `leave` frees a
+  seat. `sanitizeConfig` keeps the ceiling at or above `minPlayers`.
 - `drawerIdx` bookkeeping on `leave`: index below the current drawer →
   decrement; the current drawer leaving during drawing/judging → record a
   skipped turn and begin the turn at the same index; during reveal → set
@@ -211,6 +214,12 @@ Rules that are easy to get wrong here:
   a `pending` override that releases once the server agrees.
 - Animation comes from `svelte/transition`, `svelte/animate` and CSS.
   Do not add a motion library.
+- **Screens must fit twelve players on a phone.** `.screen` scrolls when
+  its content outgrows the viewport, but a screen with a button the player
+  must reach now (Lobby's Ready/Start, RoundEnd's Another round) gives the
+  room to its list instead: `min-height: 0; overflow-y: auto` on the list,
+  so the buttons stay pinned. A roster that pushes them off the bottom
+  reads to players as "nobody else can join".
 - **Text inputs must survive an IME.** The Enter that commits a Chinese
   candidate is the same Enter that submits a form. Stop it at the
   **keystroke** — `e.isComposing`, plus a `compositionstart`/`end` flag —
@@ -234,14 +243,16 @@ invariant with a recording fake 2D context — that logic lives in
 `lib/paint.ts` rather than `Canvas.svelte` precisely so it can be tested
 without a browser.
 
-`scripts/e2e.mjs` runs nine scenarios in real browsers against
+`scripts/e2e.mjs` runs ten scenarios in real browsers against
 `wrangler dev`: a full game to the gallery (including the drawer watching
 who has answered), the drawing timer expiring untouched, judging timing
 out with no awards, a drawer vanishing while deciding, a second round, the
 drawer being refused Start until they say what they are drawing, "Done"
 counting down the minimum drawing time, three players in one room in
-three different languages, and an IME candidate key landing in the name
-field, the note field and the guess bar without submitting any of them.
+three different languages, an IME candidate key landing in the name
+field, the note field and the guess bar without submitting any of them,
+and twelve players in one lobby on a phone with the buttons still in
+reach while a thirteenth is turned away.
 Contexts are pinned to `locale: 'en-US'` so the other scenarios read
 English whatever the machine is set to. Each scenario builds its own
 room, with short timers where it needs them and `minDrawingMs: 0` unless

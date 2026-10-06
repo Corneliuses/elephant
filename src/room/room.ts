@@ -593,6 +593,7 @@ function sanitizeConfig(c: Partial<GameConfig> | undefined): Partial<GameConfig>
   const d = DEFAULT_CONFIG
   const hour = 3_600_000
   const drawingMs = clamp(c.drawingMs, 1, hour, d.drawingMs)
+  const minPlayers = clamp(c.minPlayers, 2, 100, d.minPlayers)
   return {
     prepMs: clamp(c.prepMs, 1, hour, d.prepMs),
     drawingMs,
@@ -602,7 +603,9 @@ function sanitizeConfig(c: Partial<GameConfig> | undefined): Partial<GameConfig>
     judgingMs: clamp(c.judgingMs, 1, hour, d.judgingMs),
     revealMs: clamp(c.revealMs, 1, hour, d.revealMs),
     graceMs: clamp(c.graceMs, 1, hour, d.graceMs),
-    minPlayers: clamp(c.minPlayers, 2, 100, d.minPlayers),
+    minPlayers,
+    // A ceiling under the floor could never start a game.
+    maxPlayers: clamp(c.maxPlayers, minPlayers, 100, Math.max(d.maxPlayers, minPlayers)),
     guessMaxLen: clamp(c.guessMaxLen, 1, 500, d.guessMaxLen),
     nameMaxLen: clamp(c.nameMaxLen, 1, 100, d.nameMaxLen),
     correctPoints: clamp(c.correctPoints, 0, 100, d.correctPoints),

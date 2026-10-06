@@ -131,6 +131,12 @@ describe('error wording', () => {
     expect(t.error('need_more_players', 5)).toContain('5')
   })
 
+  it('fills in the seat limit, which a joiner meets before any state arrives', () => {
+    expect(t.error('room_full', 3)).toContain('12')
+    t.set('fr')
+    expect(t.error('room_full', 3, 8)).toContain('8')
+  })
+
   it('gives one honest sentence for the refusals only a bug can cause', () => {
     // These are all gated in the UI, so reaching one means the client is
     // wrong — better a sentence the player can read than English prose.
@@ -140,14 +146,14 @@ describe('error wording', () => {
   })
 
   it('has its own wording for what a player can really provoke', () => {
-    for (const code of ['invalid_name', 'invalid_guess', 'intent_required', 'too_early', 'game_ended', 'unauthorized'] as const) {
+    for (const code of ['invalid_name', 'invalid_guess', 'intent_required', 'too_early', 'game_ended', 'unauthorized', 'room_full'] as const) {
       expect(t.error(code, 3)).not.toBe(t.s.errGeneric)
     }
   })
 
   it('never leaks the server’s English into another language', () => {
     t.set('zh')
-    for (const code of ['invalid_name', 'not_organizer', 'unauthorized', 'need_more_players'] as const) {
+    for (const code of ['invalid_name', 'not_organizer', 'unauthorized', 'need_more_players', 'room_full'] as const) {
       expect(t.error(code, 3)).not.toMatch(/[A-Za-z]{3}/)
     }
   })

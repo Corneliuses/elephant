@@ -168,7 +168,7 @@ All events carry `now` (ms epoch) so the reducer never calls `Date.now()`.
 
 | Event | From | Allowed in | Effect |
 |---|---|---|---|
-| `join {playerId, name, avatar}` | client | any but `ended` | Add player (not ready). First player becomes organizer. |
+| `join {playerId, name, avatar}` | client | any but `ended` | Add player (not ready). First player becomes organizer. Refused with `room_full` once `maxPlayers` (12) are seated, disconnected players included; `leave` frees a seat. |
 | `set_ready {playerId, ready}` | client | any but `ended` | Toggle in the lobby. Mid-game only `ready: true` is accepted, and during `prep`/`drawing`/`judging`/`reveal` it appends the player to `drawOrder`. |
 | `start_game {playerId, seed}` | organizer | `lobby` | Requires ≥3 ready players. Shuffles ready players into `drawOrder` (seeded), starts round 1, turn 1 in `prep`. |
 | `set_intent {playerId, text}` | drawer | `prep` | What's being drawn. Private until reveal, and **required** before `start_drawing` is accepted. Fixed once the clock runs. |
@@ -354,7 +354,8 @@ picture regardless of screen size.
 | `GET /api/rooms/:code/turns/:i/strokes` | Stroke log of turn `i` for the gallery. |
 
 Config overrides at creation are clamped to sane ranges (each timer 1 ms
-to 1 h, the minimum drawing time to at most the drawing timer, etc.); the
+to 1 h, the minimum drawing time to at most the drawing timer, the seat
+limit to at least the player minimum, etc.); the
 same fields the game uses. `room.idleTtlMs` and `room.endedTtlMs` control
 garbage collection.
 
@@ -488,9 +489,9 @@ wake-up); the repaint invariant is checked against a recording fake 2D
 context. That logic lives in `lib/paint.ts` rather than in
 `Canvas.svelte` precisely so it can be tested without a browser.
 
-`scripts/e2e.mjs` is the layer none of the above reaches: nine scenarios in
-real browsers against `wrangler dev`, three browser contexts standing in
-for three phones. It has caught bugs that unit tests and typechecking did
+`scripts/e2e.mjs` is the layer none of the above reaches: ten scenarios in
+real browsers against `wrangler dev`, one browser context standing in for
+each phone (twelve of them for the full-room scenario). It has caught bugs that unit tests and typechecking did
 not — run it after changing anything in `web/` or the wire protocol.
 `ELEPHANT_ONLY=<substring>` runs just the matching scenarios.
 

@@ -13,6 +13,7 @@
  */
 import { LANGS, type Lang, type Translations } from '$shared/game/types'
 import type { WireErrorCode } from '$shared/room/protocol'
+import { DEFAULT_CONFIG } from '$shared/game/config'
 
 export { LANGS }
 export type { Lang }
@@ -131,6 +132,7 @@ interface Strings {
   errIntentNeeded: string
   errTooEarly: string
   errNeedPlayers: (n: number) => string
+  errRoomFull: (n: number) => string
   errGameOver: string
   errLostPlace: string
   errGeneric: string
@@ -221,6 +223,7 @@ const en: Strings = {
   errIntentNeeded: 'Say what you are drawing first.',
   errTooEarly: 'Keep drawing a little longer.',
   errNeedPlayers: (n) => `Need ${n} ready players.`,
+  errRoomFull: (n) => `This room is full: ${n} players is the most.`,
   errGameOver: 'The game is over.',
   errLostPlace: 'You lost your place in this room.',
   errGeneric: "That didn't work.",
@@ -311,6 +314,7 @@ const fr: Strings = {
   errIntentNeeded: "Dites d'abord ce que vous dessinez.",
   errTooEarly: 'Dessinez encore un peu.',
   errNeedPlayers: (n) => `Il faut ${n} joueurs prêts.`,
+  errRoomFull: (n) => `Ce salon est complet : ${n} joueurs au maximum.`,
   errGameOver: 'La partie est terminée.',
   errLostPlace: 'Vous avez perdu votre place dans cette salle.',
   errGeneric: "Ça n'a pas marché.",
@@ -401,6 +405,7 @@ const es: Strings = {
   errIntentNeeded: 'Di primero qué estás dibujando.',
   errTooEarly: 'Sigue dibujando un poco más.',
   errNeedPlayers: (n) => `Hacen falta ${n} jugadores listos.`,
+  errRoomFull: (n) => `Esta sala está llena: ${n} jugadores como máximo.`,
   errGameOver: 'La partida ha terminado.',
   errLostPlace: 'Has perdido tu sitio en esta sala.',
   errGeneric: 'No ha funcionado.',
@@ -491,6 +496,7 @@ const zh: Strings = {
   errIntentNeeded: '请先说说你在画什么。',
   errTooEarly: '再多画一会儿。',
   errNeedPlayers: (n) => `需要 ${n} 名准备好的玩家。`,
+  errRoomFull: (n) => `房间已满：最多 ${n} 名玩家。`,
   errGameOver: '游戏已经结束。',
   errLostPlace: '你在这个房间里的位置已经失效。',
   errGeneric: '操作没有成功。',
@@ -556,9 +562,11 @@ class I18n {
    * player's own language, which beats showing them English prose. The codes
    * the UI really can provoke get their own wording.
    */
-  error(code: WireErrorCode, minPlayers: number): string {
+  error(code: WireErrorCode, minPlayers: number, maxPlayers = DEFAULT_CONFIG.maxPlayers): string {
     const s = this.s
     switch (code) {
+      case 'room_full':
+        return s.errRoomFull(maxPlayers)
       case 'invalid_name':
         return s.errNameNeeded
       case 'invalid_guess':
